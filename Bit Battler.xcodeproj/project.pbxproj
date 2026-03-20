@@ -1,0 +1,711 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		BF2CE3522F65254700C5FF8D /* Bit Battler Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = BF2CE3512F65254700C5FF8D /* Bit Battler Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		BF2CE3572F65254700C5FF8D /* Bit_BattlerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2CE3562F65254700C5FF8D /* Bit_BattlerApp.swift */; };
+		BF2CE3592F65254700C5FF8D /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2CE3582F65254700C5FF8D /* ContentView.swift */; };
+		BF2CE35B2F65254800C5FF8D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BF2CE35A2F65254800C5FF8D /* Assets.xcassets */; };
+		BF2CE35E2F65254800C5FF8D /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BF2CE35D2F65254800C5FF8D /* Preview Assets.xcassets */; };
+		BF2CE3682F65254800C5FF8D /* Bit_Battler_Watch_AppTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2CE3672F65254800C5FF8D /* Bit_Battler_Watch_AppTests.swift */; };
+		BF2CE3722F65254800C5FF8D /* Bit_Battler_Watch_AppUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2CE3712F65254800C5FF8D /* Bit_Battler_Watch_AppUITests.swift */; };
+		BF2CE3742F65254800C5FF8D /* Bit_Battler_Watch_AppUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2CE3732F65254800C5FF8D /* Bit_Battler_Watch_AppUITestsLaunchTests.swift */; };
+		BF2CE3B12F65254800C5FF90 /* PressStart2P-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = BF2CE3B02F65254800C5FF90 /* PressStart2P-Regular.ttf */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		BF2CE3532F65254700C5FF8D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BF2CE3452F65254700C5FF8D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BF2CE3502F65254700C5FF8D;
+			remoteInfo = "Bit Battler Watch App";
+		};
+		BF2CE3642F65254800C5FF8D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BF2CE3452F65254700C5FF8D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BF2CE3502F65254700C5FF8D;
+			remoteInfo = "Bit Battler Watch App";
+		};
+		BF2CE36E2F65254800C5FF8D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BF2CE3452F65254700C5FF8D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BF2CE3502F65254700C5FF8D;
+			remoteInfo = "Bit Battler Watch App";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		BF2CE37A2F65254800C5FF8D /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				BF2CE3522F65254700C5FF8D /* Bit Battler Watch App.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		BF2CE34B2F65254700C5FF8D /* Bit Battler.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Bit Battler.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		BF2CE3512F65254700C5FF8D /* Bit Battler Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Bit Battler Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		BF2CE3562F65254700C5FF8D /* Bit_BattlerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bit_BattlerApp.swift; sourceTree = "<group>"; };
+		BF2CE3582F65254700C5FF8D /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		BF2CE35A2F65254800C5FF8D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		BF2CE35D2F65254800C5FF8D /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
+		BF2CE3632F65254800C5FF8D /* Bit Battler Watch AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Bit Battler Watch AppTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		BF2CE3672F65254800C5FF8D /* Bit_Battler_Watch_AppTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bit_Battler_Watch_AppTests.swift; sourceTree = "<group>"; };
+		BF2CE36D2F65254800C5FF8D /* Bit Battler Watch AppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Bit Battler Watch AppUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		BF2CE3712F65254800C5FF8D /* Bit_Battler_Watch_AppUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bit_Battler_Watch_AppUITests.swift; sourceTree = "<group>"; };
+		BF2CE3732F65254800C5FF8D /* Bit_Battler_Watch_AppUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bit_Battler_Watch_AppUITestsLaunchTests.swift; sourceTree = "<group>"; };
+		BF2CE3922F65254800C5FF90 /* Bit Battler Watch App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "Bit Battler Watch App.entitlements"; sourceTree = "<group>"; };
+		BF2CE3B02F65254800C5FF90 /* PressStart2P-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "PressStart2P-Regular.ttf"; sourceTree = "<group>"; };
+		BF2CE3B22F65254800C5FF90 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		BF2CE34E2F65254700C5FF8D /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BF2CE3602F65254800C5FF8D /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BF2CE36A2F65254800C5FF8D /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		BF2CE3442F65254700C5FF8D = {
+			isa = PBXGroup;
+			children = (
+				BF2CE3552F65254700C5FF8D /* Bit Battler Watch App */,
+				BF2CE3662F65254800C5FF8D /* Bit Battler Watch AppTests */,
+				BF2CE3702F65254800C5FF8D /* Bit Battler Watch AppUITests */,
+				BF2CE34C2F65254700C5FF8D /* Products */,
+				BFA8F3902F68CB200001774D /* Recovered References */,
+			);
+			sourceTree = "<group>";
+		};
+		BF2CE34C2F65254700C5FF8D /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				BF2CE34B2F65254700C5FF8D /* Bit Battler.app */,
+				BF2CE3512F65254700C5FF8D /* Bit Battler Watch App.app */,
+				BF2CE3632F65254800C5FF8D /* Bit Battler Watch AppTests.xctest */,
+				BF2CE36D2F65254800C5FF8D /* Bit Battler Watch AppUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		BF2CE3552F65254700C5FF8D /* Bit Battler Watch App */ = {
+			isa = PBXGroup;
+			children = (
+				BF2CE3B22F65254800C5FF90 /* Info.plist */,
+				BF2CE3562F65254700C5FF8D /* Bit_BattlerApp.swift */,
+				BF2CE3582F65254700C5FF8D /* ContentView.swift */,
+				BF2CE3922F65254800C5FF90 /* Bit Battler Watch App.entitlements */,
+				BF2CE3B02F65254800C5FF90 /* PressStart2P-Regular.ttf */,
+				BF2CE35A2F65254800C5FF8D /* Assets.xcassets */,
+				BF2CE35C2F65254800C5FF8D /* Preview Content */,
+			);
+			path = "Bit Battler Watch App";
+			sourceTree = "<group>";
+		};
+		BF2CE35C2F65254800C5FF8D /* Preview Content */ = {
+			isa = PBXGroup;
+			children = (
+				BF2CE35D2F65254800C5FF8D /* Preview Assets.xcassets */,
+			);
+			path = "Preview Content";
+			sourceTree = "<group>";
+		};
+		BF2CE3662F65254800C5FF8D /* Bit Battler Watch AppTests */ = {
+			isa = PBXGroup;
+			children = (
+				BF2CE3672F65254800C5FF8D /* Bit_Battler_Watch_AppTests.swift */,
+			);
+			path = "Bit Battler Watch AppTests";
+			sourceTree = "<group>";
+		};
+		BF2CE3702F65254800C5FF8D /* Bit Battler Watch AppUITests */ = {
+			isa = PBXGroup;
+			children = (
+				BF2CE3712F65254800C5FF8D /* Bit_Battler_Watch_AppUITests.swift */,
+				BF2CE3732F65254800C5FF8D /* Bit_Battler_Watch_AppUITestsLaunchTests.swift */,
+			);
+			path = "Bit Battler Watch AppUITests";
+			sourceTree = "<group>";
+		};
+		BFA8F3902F68CB200001774D /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		BF2CE34A2F65254700C5FF8D /* Bit Battler */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BF2CE37B2F65254800C5FF8D /* Build configuration list for PBXNativeTarget "Bit Battler" */;
+			buildPhases = (
+				BF2CE3492F65254700C5FF8D /* Resources */,
+				BF2CE37A2F65254800C5FF8D /* Embed Watch Content */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				BF2CE3542F65254700C5FF8D /* PBXTargetDependency */,
+			);
+			name = "Bit Battler";
+			productName = "Bit Battler";
+			productReference = BF2CE34B2F65254700C5FF8D /* Bit Battler.app */;
+			productType = "com.apple.product-type.application.watchapp2-container";
+		};
+		BF2CE3502F65254700C5FF8D /* Bit Battler Watch App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BF2CE3772F65254800C5FF8D /* Build configuration list for PBXNativeTarget "Bit Battler Watch App" */;
+			buildPhases = (
+				BF2CE34D2F65254700C5FF8D /* Sources */,
+				BF2CE34E2F65254700C5FF8D /* Frameworks */,
+				BF2CE34F2F65254700C5FF8D /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "Bit Battler Watch App";
+			productName = "Bit Battler Watch App";
+			productReference = BF2CE3512F65254700C5FF8D /* Bit Battler Watch App.app */;
+			productType = "com.apple.product-type.application";
+		};
+		BF2CE3622F65254800C5FF8D /* Bit Battler Watch AppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BF2CE37E2F65254800C5FF8D /* Build configuration list for PBXNativeTarget "Bit Battler Watch AppTests" */;
+			buildPhases = (
+				BF2CE35F2F65254800C5FF8D /* Sources */,
+				BF2CE3602F65254800C5FF8D /* Frameworks */,
+				BF2CE3612F65254800C5FF8D /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				BF2CE3652F65254800C5FF8D /* PBXTargetDependency */,
+			);
+			name = "Bit Battler Watch AppTests";
+			productName = "Bit Battler Watch AppTests";
+			productReference = BF2CE3632F65254800C5FF8D /* Bit Battler Watch AppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		BF2CE36C2F65254800C5FF8D /* Bit Battler Watch AppUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BF2CE3812F65254800C5FF8D /* Build configuration list for PBXNativeTarget "Bit Battler Watch AppUITests" */;
+			buildPhases = (
+				BF2CE3692F65254800C5FF8D /* Sources */,
+				BF2CE36A2F65254800C5FF8D /* Frameworks */,
+				BF2CE36B2F65254800C5FF8D /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				BF2CE36F2F65254800C5FF8D /* PBXTargetDependency */,
+			);
+			name = "Bit Battler Watch AppUITests";
+			productName = "Bit Battler Watch AppUITests";
+			productReference = BF2CE36D2F65254800C5FF8D /* Bit Battler Watch AppUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		BF2CE3452F65254700C5FF8D /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1540;
+				LastUpgradeCheck = 2630;
+				TargetAttributes = {
+					BF2CE34A2F65254700C5FF8D = {
+						CreatedOnToolsVersion = 15.4;
+					};
+					BF2CE3502F65254700C5FF8D = {
+						CreatedOnToolsVersion = 15.4;
+					};
+					BF2CE3622F65254800C5FF8D = {
+						CreatedOnToolsVersion = 15.4;
+						TestTargetID = BF2CE3502F65254700C5FF8D;
+					};
+					BF2CE36C2F65254800C5FF8D = {
+						CreatedOnToolsVersion = 15.4;
+						TestTargetID = BF2CE3502F65254700C5FF8D;
+					};
+				};
+			};
+			buildConfigurationList = BF2CE3482F65254700C5FF8D /* Build configuration list for PBXProject "Bit Battler" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+			);
+			mainGroup = BF2CE3442F65254700C5FF8D;
+			productRefGroup = BF2CE34C2F65254700C5FF8D /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				BF2CE34A2F65254700C5FF8D /* Bit Battler */,
+				BF2CE3502F65254700C5FF8D /* Bit Battler Watch App */,
+				BF2CE3622F65254800C5FF8D /* Bit Battler Watch AppTests */,
+				BF2CE36C2F65254800C5FF8D /* Bit Battler Watch AppUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		BF2CE3492F65254700C5FF8D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BF2CE34F2F65254700C5FF8D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BF2CE35E2F65254800C5FF8D /* Preview Assets.xcassets in Resources */,
+				BF2CE35B2F65254800C5FF8D /* Assets.xcassets in Resources */,
+				BF2CE3B12F65254800C5FF90 /* PressStart2P-Regular.ttf in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BF2CE3612F65254800C5FF8D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BF2CE36B2F65254800C5FF8D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		BF2CE34D2F65254700C5FF8D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BF2CE3572F65254700C5FF8D /* Bit_BattlerApp.swift in Sources */,
+				BF2CE3592F65254700C5FF8D /* ContentView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BF2CE35F2F65254800C5FF8D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BF2CE3682F65254800C5FF8D /* Bit_Battler_Watch_AppTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BF2CE3692F65254800C5FF8D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BF2CE3722F65254800C5FF8D /* Bit_Battler_Watch_AppUITests.swift in Sources */,
+				BF2CE3742F65254800C5FF8D /* Bit_Battler_Watch_AppUITestsLaunchTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		BF2CE3542F65254700C5FF8D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BF2CE3502F65254700C5FF8D /* Bit Battler Watch App */;
+			targetProxy = BF2CE3532F65254700C5FF8D /* PBXContainerItemProxy */;
+		};
+		BF2CE3652F65254800C5FF8D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BF2CE3502F65254700C5FF8D /* Bit Battler Watch App */;
+			targetProxy = BF2CE3642F65254800C5FF8D /* PBXContainerItemProxy */;
+		};
+		BF2CE36F2F65254800C5FF8D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BF2CE3502F65254700C5FF8D /* Bit Battler Watch App */;
+			targetProxy = BF2CE36E2F65254800C5FF8D /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		BF2CE3752F65254800C5FF8D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 67PG5A4439;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		BF2CE3762F65254800C5FF8D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 67PG5A4439;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		BF2CE3782F65254800C5FF8D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Bit Battler Watch App/Bit Battler Watch App.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "\"Bit Battler Watch App/Preview Content\"";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Bit Battler Watch App/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Bit Battler";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKWatchOnly = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_SWIFT_FLAGS = "-parse-as-library";
+				PRODUCT_BUNDLE_IDENTIFIER = "Oh-Hey-Digital.Bit-Battler.watchkitapp";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.5;
+			};
+			name = Debug;
+		};
+		BF2CE3792F65254800C5FF8D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Bit Battler Watch App/Bit Battler Watch App.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "\"Bit Battler Watch App/Preview Content\"";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Bit Battler Watch App/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Bit Battler";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKWatchOnly = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_SWIFT_FLAGS = "-parse-as-library";
+				PRODUCT_BUNDLE_IDENTIFIER = "Oh-Hey-Digital.Bit-Battler.watchkitapp";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 10.5;
+			};
+			name = Release;
+		};
+		BF2CE37C2F65254800C5FF8D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_KEY_CFBundleDisplayName = "Bit Battler";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "Oh-Hey-Digital.Bit-Battler";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		BF2CE37D2F65254800C5FF8D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_KEY_CFBundleDisplayName = "Bit Battler";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "Oh-Hey-Digital.Bit-Battler";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		BF2CE37F2F65254800C5FF8D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "Oh-Hey-Digital.Bit-Battler-Watch-AppTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Bit Battler Watch App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Bit Battler Watch App";
+				WATCHOS_DEPLOYMENT_TARGET = 10.5;
+			};
+			name = Debug;
+		};
+		BF2CE3802F65254800C5FF8D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "Oh-Hey-Digital.Bit-Battler-Watch-AppTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Bit Battler Watch App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Bit Battler Watch App";
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 10.5;
+			};
+			name = Release;
+		};
+		BF2CE3822F65254800C5FF8D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "Oh-Hey-Digital.Bit-Battler-Watch-AppUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_TARGET_NAME = "Bit Battler Watch App";
+				WATCHOS_DEPLOYMENT_TARGET = 10.5;
+			};
+			name = Debug;
+		};
+		BF2CE3832F65254800C5FF8D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "Oh-Hey-Digital.Bit-Battler-Watch-AppUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_TARGET_NAME = "Bit Battler Watch App";
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 10.5;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		BF2CE3482F65254700C5FF8D /* Build configuration list for PBXProject "Bit Battler" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BF2CE3752F65254800C5FF8D /* Debug */,
+				BF2CE3762F65254800C5FF8D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BF2CE3772F65254800C5FF8D /* Build configuration list for PBXNativeTarget "Bit Battler Watch App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BF2CE3782F65254800C5FF8D /* Debug */,
+				BF2CE3792F65254800C5FF8D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BF2CE37B2F65254800C5FF8D /* Build configuration list for PBXNativeTarget "Bit Battler" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BF2CE37C2F65254800C5FF8D /* Debug */,
+				BF2CE37D2F65254800C5FF8D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BF2CE37E2F65254800C5FF8D /* Build configuration list for PBXNativeTarget "Bit Battler Watch AppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BF2CE37F2F65254800C5FF8D /* Debug */,
+				BF2CE3802F65254800C5FF8D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BF2CE3812F65254800C5FF8D /* Build configuration list for PBXNativeTarget "Bit Battler Watch AppUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BF2CE3822F65254800C5FF8D /* Debug */,
+				BF2CE3832F65254800C5FF8D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = BF2CE3452F65254700C5FF8D /* Project object */;
+}
