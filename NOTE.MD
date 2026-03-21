@@ -2,7 +2,6 @@
 
 ## Items
 ### Consumables
-- Bomb: Attack, single target, 2 damage, reset attack count for that enemy to 0
 - Bow: May make one free attack on room reset
 
 ### Power-ups

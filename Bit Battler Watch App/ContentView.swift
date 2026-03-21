@@ -15,12 +15,14 @@ import UIKit
 enum GameplayAssetPrewarm {
     private static let assetNames: [String] = [
         "Room", "Torch", "Arrow", "Heart", "Mana",
-        "RogueIdle", "RogueAttack", "RogueWalk", "RogueDamage", "RogueDodge", "RogueDie", "RogueShuriken", "RogueBombThrow",
+        "RogueIdle", "RogueAttack", "RogueWalk", "RogueDamage", "RogueDodge", "RogueDie", "RogueShuriken", "RogueBombThrow", "RogueKnifeThrow",
         "OrcIdle", "OrcAttack", "OrcDamage", "OrcDie",
+        "GoblinIdle", "GoblinAttack", "GoblinDamage", "GoblinDie",
         "TrollIdle", "TrollAttack", "TrollDamage", "TrollDie",
         "SlimeIdle", "SlimeAttack", "SlimeDamage", "SlimeDead",
+        "BlueSlimeIdle", "BlueSlimeAttack", "BlueSlimeDamage", "BlueSlimeDie",
         "CyclopsIdle", "CyclopsAttack", "CyclopsDamage", "CyclopsDead",
-        "BombIcon", "BombGround", "BombThrown",
+        "BombGround", "BombThrown", "ThrowingKnifeIcon", "KnifeThrown",
         "Heal", "ManaRestore",
         "SmallHealthPotion", "SmallManaPotion",
     ]
@@ -181,6 +183,18 @@ private enum RootScreen {
     case info
 }
 
+/// Bomb (skill) and Throwing Knife (item) share the same on-field target picker UI.
+private enum InventoryEnemyTargetItem: Equatable {
+    case bomb
+    case throwingKnife
+}
+
+struct EnemyHitFloatState: Equatable {
+    let startDate: Date
+    let damageAmount: Int
+    let showCritBang: Bool
+}
+
 struct ContentView: View {
     @State private var isRogueAttacking = false
     @State private var attackStartDate: Date?
@@ -206,7 +220,7 @@ struct ContentView: View {
     /// Title screen: show loading overlay until gameplay assets are prewarmed (watchOS).
     @State private var isStartLoadingGame = false
     @State private var gameSessionId = UUID()
-    @State private var roomNumber: Int = 1
+    @State private var roomNumber: Int = GameConstants.startingRoomNumber
 
     // Rogue health / game-over.
     @State private var heartsRemaining: Int = GameConstants.heartsInitial
@@ -216,13 +230,10 @@ struct ContentView: View {
     @State private var rogueDieStartDate: Date? = nil
     @State private var rogueDodgeStartDate: Date? = nil
 
-    // Inventory (rogue starts with one bomb).
-    @State private var inventoryStacks: [InventoryStack] = [
-        InventoryStack(displayName: "Bomb", count: 1)
-    ]
+    @State private var inventoryStacks: [InventoryStack] = []
     /// The enemy index whose death animation should spawn the room's item drop.
     @State private var potionDropEnemyIndex: Int? = nil
-    /// Asset for the drop: "SmallHealthPotion", "SmallManaPotion", or "BombIcon".
+    /// Asset for the drop: potion or throwing knife icon names (see `randomRoomDropImageName()`).
     @State private var potionDropImageName: String? = nil
 
     // Inventory UI.
@@ -237,21 +248,27 @@ struct ContentView: View {
     @State private var isShurikenActive: Bool = false
     @State private var shurikenDamageApplied: Bool = false
     
-    /// enemyIndex -> crit animation start date (clears automatically).
-    @State private var critTextStartDates: [Int: Date] = [:]
+    /// enemyIndex -> floating hit text (damage amount + optional crit bang; clears automatically).
+    @State private var enemyHitFloatStates: [Int: EnemyHitFloatState] = [:]
 
     // Healing effect (8-frame sprite sheet).
     @State private var healEffectStartDate: Date? = nil
     // Mana restore effect (8-frame sprite sheet).
     @State private var manaRestoreEffectStartDate: Date? = nil
 
-    // Bomb item (throw + VFX).
-    @State private var isBombTargetSelectionActive: Bool = false
+    // Bomb skill + knife item: field target picker; bomb throw VFX.
+    @State private var inventoryEnemyTargetItem: InventoryEnemyTargetItem? = nil
     @State private var isBombThrowActive: Bool = false
     @State private var bombThrowStartDate: Date? = nil
     @State private var bombTargetIndex: Int? = nil
     @State private var bombProjectileStartDate: Date? = nil
     @State private var bombGroundStartDate: Date? = nil
+
+    // Throwing Knife (throw + projectile; does not advance enemy turn / hit tallies).
+    @State private var isKnifeThrowActive: Bool = false
+    @State private var knifeThrowStartDate: Date? = nil
+    @State private var knifeTargetIndex: Int? = nil
+    @State private var knifeProjectileStartDate: Date? = nil
 
     // Enemy auto-attacks (per-enemy readiness in `OrcState.rogueAttacksUntilEnemyTurn`).
     @State private var isEnemyAttackSequenceInProgress: Bool = false
@@ -262,9 +279,19 @@ struct ContentView: View {
     /// Enemy retaliation phases queued by rogue attacks.
     @State private var pendingEnemyAttackPhases: Int = 0
 
+    /// `roll == 0` wave: goblin art in rooms 1–9, orc art from room 10+.
+    private var isOrcSlotWave: Bool {
+        !isSlimeWave && !isTrollWave && !isCyclopsWave
+    }
+
+    private var isGoblinWave: Bool {
+        isOrcSlotWave && roomNumber < 10
+    }
+
     private var canTapOrcs: Bool {
         // HealthKit has been removed from this app; attacks are no longer limited by step count.
         return !isBombThrowActive
+            && !isKnifeThrowActive
             && !isRogueDead
             && rogueDamageStartDate == nil
             && rogueDieStartDate == nil
@@ -283,7 +310,11 @@ struct ContentView: View {
     }
 
     private var canConsumeItems: Bool {
-        !isBombThrowActive && !isRogueDead && rogueDamageStartDate == nil && rogueDieStartDate == nil
+        !isBombThrowActive && !isKnifeThrowActive && !isRogueDead && rogueDamageStartDate == nil && rogueDieStartDate == nil
+    }
+
+    private var isInventoryEnemyTargetSelectionActive: Bool {
+        inventoryEnemyTargetItem != nil
     }
 
     private func addSmallHealthPotionToInventory() {
@@ -318,8 +349,8 @@ struct ContentView: View {
         }
     }
 
-    private func addBombToInventory() {
-        let displayName = "Bomb"
+    private func addThrowingKnifeToInventory() {
+        let displayName = "Throwing Knife"
         if let idx = inventoryStacks.firstIndex(where: { $0.displayName == displayName }) {
             inventoryStacks[idx].count += 1
         } else {
@@ -327,10 +358,9 @@ struct ContentView: View {
         }
     }
 
-    /// Removes one bomb from inventory if available. Returns whether a bomb was consumed.
     @discardableResult
-    private func consumeBombStack() -> Bool {
-        let displayName = "Bomb"
+    private func consumeThrowingKnifeStack() -> Bool {
+        let displayName = "Throwing Knife"
         guard let idx = inventoryStacks.firstIndex(where: { $0.displayName == displayName }) else { return false }
         guard inventoryStacks[idx].count > 0 else { return false }
 
@@ -370,12 +400,12 @@ struct ContentView: View {
         }
     }
 
-    /// Room drop shown on the last enemy's death (health, mana, or bomb).
+    /// Room drop shown on the last enemy's death (health, mana, or throwing knife).
     private func randomRoomDropImageName() -> String {
         switch Int.random(in: 0..<3) {
         case 0: return "SmallHealthPotion"
         case 1: return "SmallManaPotion"
-        default: return "BombIcon"
+        default: return "ThrowingKnifeIcon"
         }
     }
 
@@ -385,8 +415,8 @@ struct ContentView: View {
             addSmallManaPotionToInventory()
         case "SmallHealthPotion":
             addSmallHealthPotionToInventory()
-        case "BombIcon":
-            addBombToInventory()
+        case "ThrowingKnifeIcon":
+            addThrowingKnifeToInventory()
         default:
             break
         }
@@ -406,7 +436,7 @@ struct ContentView: View {
             return canConsumeItems && stack.count > 0 && heartsRemaining < GameConstants.heartsInitial
         case "Sm Mana Pot":
             return canConsumeItems && stack.count > 0 && manaRemaining < GameConstants.manaInitial
-        case "Bomb":
+        case "Throwing Knife":
             return canConsumeItems && hasLivingEnemies && stack.count > 0
         default:
             return false
@@ -422,7 +452,7 @@ struct ContentView: View {
     }
 
     /// Crown × `digitalCrownRotation` can ignore the first programmatic dismiss or snap detent back after
-    /// inventory updates (e.g. potion consumed, Bomb row still visible). Re-dismiss on the next run loop.
+    /// inventory updates (e.g. potion consumed). Re-dismiss on the next run loop.
     private func schedulePostConsumeItemsMenuDismiss() {
         DispatchQueue.main.async {
             dismissItemsMenu()
@@ -443,15 +473,15 @@ struct ContentView: View {
         }
     }
     
-    private func triggerCritText(forEnemyIndex enemyIndex: Int, startDate: Date, forSession sessionId: UUID) {
-        // Ensure crit text clears even if another crit overwrites the same enemy index.
-        critTextStartDates[enemyIndex] = startDate
-        
+    private func triggerEnemyHitFloat(forEnemyIndex enemyIndex: Int, damageAmount: Int, showCritBang: Bool, startDate: Date, forSession sessionId: UUID) {
+        let state = EnemyHitFloatState(startDate: startDate, damageAmount: damageAmount, showCritBang: showCritBang)
+        enemyHitFloatStates[enemyIndex] = state
+
         DispatchQueue.main.asyncAfter(deadline: .now() + GameConstants.critTextDuration) {
             guard gameSessionId == sessionId else { return }
-            guard critTextStartDates[enemyIndex] == startDate else { return }
+            guard enemyHitFloatStates[enemyIndex]?.startDate == startDate else { return }
             withTransaction(Transaction(animation: nil)) {
-                critTextStartDates[enemyIndex] = nil
+                enemyHitFloatStates[enemyIndex] = nil
             }
         }
     }
@@ -475,6 +505,9 @@ struct ContentView: View {
         }
         if isSlimeWave {
             return Double(GameConstants.slimeDieFrameCount) * GameConstants.deathFrameDuration
+        }
+        if isGoblinWave {
+            return Double(GameConstants.goblinDieFrameCount) * GameConstants.deathFrameDuration
         }
         return GameConstants.deathAnimationDuration
     }
@@ -532,12 +565,16 @@ struct ContentView: View {
                 potionDropEnemyIndex = nil
                 potionDropImageName = nil
 
-                isBombTargetSelectionActive = false
+                inventoryEnemyTargetItem = nil
                 isBombThrowActive = false
                 bombThrowStartDate = nil
                 bombTargetIndex = nil
                 bombProjectileStartDate = nil
                 bombGroundStartDate = nil
+                isKnifeThrowActive = false
+                knifeThrowStartDate = nil
+                knifeTargetIndex = nil
+                knifeProjectileStartDate = nil
             }
         }
 
@@ -555,7 +592,8 @@ struct ContentView: View {
         guard !isRoomWiping else { return }
         guard !isEnemyAttackSequenceInProgress else { return }
         guard !isBombThrowActive else { return }
-        guard !isBombTargetSelectionActive else { return }
+        guard !isKnifeThrowActive else { return }
+        guard !isInventoryEnemyTargetSelectionActive else { return }
         guard !isRogueDead else { return }
         guard rogueDamageStartDate == nil else { return }
         guard rogueDieStartDate == nil else { return }
@@ -604,9 +642,10 @@ struct ContentView: View {
 
     private func resetOrcs() {
         // New enemy wave types:
-        // - Slime: 4 enemies, 2 hits each
+        // - Slime: 4 enemies; 2 hits (green) until room 10+, then blue slimes with 3 hits each
         // - Cyclops: 1 enemy, 8 hits, death animation spans 14 frames
-        // - Orcs / Trolls: existing wave logic
+        // - Orc slot (roll 0): 3 goblins (rooms 1–9, 3+ hits) or 3 orcs (room 10+, 4+ hits)
+        // - Trolls: existing wave logic
         let roll = Int.random(in: 0..<4)
         isSlimeWave = roll == 2
         isCyclopsWave = roll == 3
@@ -614,7 +653,7 @@ struct ContentView: View {
         isTrollWave = roll == 1
 
         switch roll {
-        case 0: // Orcs
+        case 0: // Orc slot: goblins early, orcs from room 10
             orcCount = 3
         case 1: // Trolls
             orcCount = 2
@@ -626,8 +665,9 @@ struct ContentView: View {
 
         let hitsToKill: Int = {
             if isCyclopsWave { return 8 }
-            if isSlimeWave { return 2 }
-            return isTrollWave ? 5 : 3
+            if isSlimeWave { return roomNumber >= 10 ? GameConstants.blueSlimeHitsToKill : GameConstants.slimeHitsToKill }
+            if isTrollWave { return 5 }
+            return roomNumber >= 10 ? GameConstants.orcHitsToKill : GameConstants.goblinHitsToKill
         }()
 
         orcStates = (0..<orcCount).map { _ in
@@ -642,7 +682,7 @@ struct ContentView: View {
         }
         
         // Clear transient per-enemy text overlays between waves.
-        critTextStartDates.removeAll()
+        enemyHitFloatStates.removeAll()
         
         damagedOrcIndex = nil
         orcDamageStartDate = nil
@@ -700,7 +740,7 @@ struct ContentView: View {
         startEnemyAttackSequence(forSession: sessionId)
     }
 
-    /// Rogue melee, shuriken, and bomb each count as one "attack action" for every living enemy's retaliation timer.
+    /// Rogue melee, shuriken, and bomb each count as one "attack action" for every living enemy's retaliation timer (Throwing Knife does not).
     private func applyRogueAttackActionAdvancingEnemyTurns() {
         for i in 0..<orcStates.count {
             guard !orcStates[i].dead && !orcStates[i].dying else { continue }
@@ -876,7 +916,7 @@ struct ContentView: View {
 
     private func resetGameToInitialState() {
         gameSessionId = UUID()
-        roomNumber = 1
+        roomNumber = GameConstants.startingRoomNumber
         totalHitsUsed = 0
         heartsRemaining = GameConstants.heartsInitial
         manaRemaining = GameConstants.manaInitial
@@ -912,9 +952,8 @@ struct ContentView: View {
         isCyclopsWave = false
         orcCount = 2
 
-        // Reset inventory + potion tracking (restock starting bomb).
-        inventoryStacks.removeAll()
-        addBombToInventory()
+        // Reset inventory + potion tracking.
+        inventoryStacks = []
         potionDropEnemyIndex = nil
         potionDropImageName = nil
 
@@ -924,18 +963,22 @@ struct ContentView: View {
         inventoryCrownDetent = 0
         suppressItemsMenuOverlay = false
 
-        isBombTargetSelectionActive = false
+        inventoryEnemyTargetItem = nil
         isBombThrowActive = false
         bombThrowStartDate = nil
         bombTargetIndex = nil
         bombProjectileStartDate = nil
         bombGroundStartDate = nil
+        isKnifeThrowActive = false
+        knifeThrowStartDate = nil
+        knifeTargetIndex = nil
+        knifeProjectileStartDate = nil
 
         showSkillSheet = false
         shurikenStartDate = nil
         isShurikenActive = false
         shurikenDamageApplied = false
-        critTextStartDates.removeAll()
+        enemyHitFloatStates.removeAll()
 
         resetOrcs()
     }
@@ -990,20 +1033,23 @@ struct ContentView: View {
     private func startBombThrow(targetIndex index: Int) {
         let sessionId = gameSessionId
         guard !isBombThrowActive else { return }
+        guard !isKnifeThrowActive else { return }
+        guard !isShurikenActive else { return }
         guard !isRogueWalking else { return }
         guard index >= 0, index < orcStates.count else { return }
         guard !orcStates[index].dead, !orcStates[index].dying else { return }
-        guard consumeBombStack() else {
+        guard manaRemaining > 0 else {
             withTransaction(Transaction(animation: nil)) {
-                isBombTargetSelectionActive = false
+                inventoryEnemyTargetItem = nil
                 inventoryCrownDetent = 0
             }
             return
         }
 
         withTransaction(Transaction(animation: nil)) {
-            isBombTargetSelectionActive = false
+            inventoryEnemyTargetItem = nil
             inventoryCrownDetent = 0
+            manaRemaining -= 1
         }
 
         applyRogueAttackActionAdvancingEnemyTurns()
@@ -1046,13 +1092,16 @@ struct ContentView: View {
             guard index < orcStates.count else { return }
             guard !orcStates[index].dead, !orcStates[index].dying else { return }
 
-            orcStates[index].hitCount += GameConstants.bombDamageHits
+            let didBombCrit = Double.random(in: 0..<1) < GameConstants.rogueCriticalHitChance
+            orcStates[index].hitCount += didBombCrit ? 3 : 2
             // Stun: only the bombed enemy's retaliation tally resets.
             orcStates[index].rogueAttacksUntilEnemyTurn = GameConstants.rogueAttacksPerEnemyAttackCycle
 
             withTransaction(Transaction(animation: nil)) {
                 damagedOrcIndex = index
                 orcDamageStartDate = Date()
+                let dmg = didBombCrit ? 3 : 2
+                triggerEnemyHitFloat(forEnemyIndex: index, damageAmount: dmg, showCritBang: didBombCrit, startDate: Date(), forSession: sessionId)
             }
 
             DispatchQueue.main.asyncAfter(deadline: .now() + orcDamageDuration) {
@@ -1119,9 +1168,123 @@ struct ContentView: View {
         }
     }
 
+    private func startKnifeThrow(targetIndex index: Int) {
+        let sessionId = gameSessionId
+        guard !isBombThrowActive else { return }
+        guard !isKnifeThrowActive else { return }
+        guard !isRogueWalking else { return }
+        guard index >= 0, index < orcStates.count else { return }
+        guard !orcStates[index].dead, !orcStates[index].dying else { return }
+        guard consumeThrowingKnifeStack() else {
+            withTransaction(Transaction(animation: nil)) {
+                inventoryEnemyTargetItem = nil
+                inventoryCrownDetent = 0
+            }
+            return
+        }
+
+        withTransaction(Transaction(animation: nil)) {
+            inventoryEnemyTargetItem = nil
+            inventoryCrownDetent = 0
+        }
+
+        let throwStart = Date()
+        withTransaction(Transaction(animation: nil)) {
+            isKnifeThrowActive = true
+            knifeThrowStartDate = throwStart
+            knifeTargetIndex = index
+            knifeProjectileStartDate = nil
+            isAttackInputLocked = true
+        }
+
+        let projLaunch = Double(GameConstants.knifeProjectileLaunchFrame - 1) * GameConstants.knifeThrowFrameDuration
+        let damageTime = projLaunch + GameConstants.knifeProjectileDuration
+        let unlockTime = damageTime + orcDamageDuration
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + projLaunch) {
+            guard gameSessionId == sessionId else { return }
+            guard isKnifeThrowActive else { return }
+            withTransaction(Transaction(animation: nil)) {
+                knifeProjectileStartDate = Date()
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + damageTime) {
+            guard gameSessionId == sessionId else { return }
+            guard index < orcStates.count else { return }
+            guard !orcStates[index].dead, !orcStates[index].dying else { return }
+
+            orcStates[index].hitCount += 2
+
+            withTransaction(Transaction(animation: nil)) {
+                knifeProjectileStartDate = nil
+                damagedOrcIndex = index
+                orcDamageStartDate = Date()
+                triggerEnemyHitFloat(forEnemyIndex: index, damageAmount: 2, showCritBang: false, startDate: Date(), forSession: sessionId)
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + orcDamageDuration) {
+                guard gameSessionId == sessionId else { return }
+                withTransaction(Transaction(animation: nil)) {
+                    damagedOrcIndex = nil
+                    orcDamageStartDate = nil
+                }
+                if orcStates[index].hitCount >= orcStates[index].hitsToKill, !orcStates[index].dead, !orcStates[index].dying {
+                    let isLastDyingStart = orcStates.enumerated().allSatisfy { (i, s) in
+                        if i == index { return true }
+                        return s.dead || s.dying
+                    }
+
+                    withTransaction(Transaction(animation: nil)) {
+                        orcStates[index].dying = true
+                        orcStates[index].deathStartDate = Date()
+                    }
+
+                    if isLastDyingStart {
+                        let dropName = randomRoomDropImageName()
+                        withTransaction(Transaction(animation: nil)) {
+                            addRoomDropItemToInventory(assetImageName: dropName)
+                            potionDropImageName = dropName
+                            potionDropEnemyIndex = index
+                        }
+                    }
+
+                    DispatchQueue.main.asyncAfter(deadline: .now() + orcDieDuration) {
+                        guard gameSessionId == sessionId else { return }
+                        withTransaction(Transaction(animation: nil)) {
+                            orcStates[index].dead = true
+                            orcStates[index].dying = false
+                            orcStates[index].deathStartDate = nil
+                        }
+
+                        if isLastDyingStart {
+                            withTransaction(Transaction(animation: nil)) {
+                                potionDropEnemyIndex = nil
+                                potionDropImageName = nil
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + unlockTime) {
+            guard gameSessionId == sessionId else { return }
+            withTransaction(Transaction(animation: nil)) {
+                isKnifeThrowActive = false
+                knifeThrowStartDate = nil
+                knifeTargetIndex = nil
+                knifeProjectileStartDate = nil
+                isAttackInputLocked = false
+            }
+            maybeStartPendingEnemyAttack(forSession: sessionId)
+        }
+    }
+
     private func startShurikenAttack() {
         let sessionId = gameSessionId
         guard !isBombThrowActive else { return }
+        guard !isKnifeThrowActive else { return }
         guard !isShurikenActive else { return }
         guard !isRogueDead else { return }
         guard hasLivingEnemies else { return }
@@ -1153,10 +1316,9 @@ struct ContentView: View {
                 guard !orcStates[i].dead, !orcStates[i].dying else { continue }
                 
                 let didCrit = Double.random(in: 0..<1) < GameConstants.rogueCriticalHitChance
-                orcStates[i].hitCount += didCrit ? 2 : 1
-                if didCrit {
-                    triggerCritText(forEnemyIndex: i, startDate: Date(), forSession: sessionId)
-                }
+                let dmg = didCrit ? 2 : 1
+                orcStates[i].hitCount += dmg
+                triggerEnemyHitFloat(forEnemyIndex: i, damageAmount: dmg, showCritBang: didCrit, startDate: Date(), forSession: sessionId)
 
                 if orcStates[i].hitCount >= orcStates[i].hitsToKill {
                     killedIndices.append(i)
@@ -1252,9 +1414,8 @@ struct ContentView: View {
             withTransaction(Transaction(animation: nil)) {
                 damagedOrcIndex = index
                 orcDamageStartDate = Date()
-                if didCrit {
-                    triggerCritText(forEnemyIndex: index, startDate: Date(), forSession: sessionId)
-                }
+                let dmg = didCrit ? 2 : 1
+                triggerEnemyHitFloat(forEnemyIndex: index, damageAmount: dmg, showCritBang: didCrit, startDate: Date(), forSession: sessionId)
             }
         }
             DispatchQueue.main.asyncAfter(deadline: .now() + orcDamageDelay + orcDamageDuration) {
@@ -1388,8 +1549,9 @@ struct ContentView: View {
                     .foregroundStyle(.primary)
             }
             .buttonStyle(.plain)
-            .padding(.top, 2)
+            .padding(.top, 0)
             .padding(.trailing, 4)
+            .offset(y: -10)
 #if os(watchOS)
             .disabled(isStartLoadingGame)
             .opacity(isStartLoadingGame ? 0.35 : 1)
@@ -1505,7 +1667,7 @@ struct ContentView: View {
                     isCyclopsWave: isCyclopsWave,
                     orcCount: orcCount,
                     orcStates: orcStates,
-                    critTextStartDates: critTextStartDates,
+                    enemyHitFloatStates: enemyHitFloatStates,
                     canTapOrcs: canTapOrcs,
                     isShurikenActive: isShurikenActive,
                     shurikenStartDate: shurikenStartDate,
@@ -1513,16 +1675,25 @@ struct ContentView: View {
                     potionDropImageName: potionDropImageName,
                     healEffectStartDate: healEffectStartDate,
                     manaRestoreEffectStartDate: manaRestoreEffectStartDate,
-                    isBombTargetSelectionActive: isBombTargetSelectionActive,
+                    isInventoryEnemyTargetSelectionActive: isInventoryEnemyTargetSelectionActive,
                     isBombThrowActive: isBombThrowActive,
                     bombThrowStartDate: bombThrowStartDate,
                     bombTargetIndex: bombTargetIndex,
                     bombProjectileStartDate: bombProjectileStartDate,
                     bombGroundStartDate: bombGroundStartDate,
+                    isKnifeThrowActive: isKnifeThrowActive,
+                    knifeThrowStartDate: knifeThrowStartDate,
+                    knifeTargetIndex: knifeTargetIndex,
+                    knifeProjectileStartDate: knifeProjectileStartDate,
                     touchTargetSize: max(GameConstants.spriteFrameSize * 0.28125, GameConstants.minTouchTargetSize),
                     onOrcTap: { index in
-                        if isBombTargetSelectionActive {
-                            startBombThrow(targetIndex: index)
+                        if let mode = inventoryEnemyTargetItem {
+                            switch mode {
+                            case .bomb:
+                                startBombThrow(targetIndex: index)
+                            case .throwingKnife:
+                                startKnifeThrow(targetIndex: index)
+                            }
                             return
                         }
                         let pos = enemyPosition(index: index)
@@ -1533,7 +1704,7 @@ struct ContentView: View {
                         )
                     },
                     onRogueTap: {
-                        if canTapOrcs && !isRogueAttacking && !isAttackInputLocked && !isRogueWalking && !isBombThrowActive && !isBombTargetSelectionActive {
+                        if canTapOrcs && !isRogueAttacking && !isAttackInputLocked && !isRogueWalking && !isBombThrowActive && !isKnifeThrowActive && !isInventoryEnemyTargetSelectionActive {
                             showSkillSheet = true
                         }
                     },
@@ -1546,8 +1717,8 @@ struct ContentView: View {
                 .offset(y: -9)
             }
             .overlay {
-                // Hide Items while choosing a bomb target so the crown/detent binding can’t leave both UIs up (see bomb row in `inventorySheetScrollContent`).
-                if inventoryCrownDetent > 0.5 && !isBombTargetSelectionActive && !suppressItemsMenuOverlay {
+                // Hide Items while choosing a bomb/knife target so the crown/detent binding can’t leave both UIs up.
+                if inventoryCrownDetent > 0.5 && !isInventoryEnemyTargetSelectionActive && !suppressItemsMenuOverlay {
                     FullScreenMenuSheet(title: "Items") {
                         dismissItemsMenu()
                     } content: {
@@ -1572,7 +1743,15 @@ struct ContentView: View {
                                     startShurikenAttack()
                                 }
                                 .buttonStyle(.bordered)
-                                .disabled(!hasLivingEnemies || manaRemaining <= 0 || isBombThrowActive || isBombTargetSelectionActive)
+                                .disabled(!hasLivingEnemies || manaRemaining <= 0 || isBombThrowActive || isKnifeThrowActive || isInventoryEnemyTargetSelectionActive)
+                                Button("Bomb") {
+                                    withTransaction(Transaction(animation: nil)) {
+                                        showSkillSheet = false
+                                        inventoryEnemyTargetItem = .bomb
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(!hasLivingEnemies || manaRemaining <= 0 || isBombThrowActive || isKnifeThrowActive || isInventoryEnemyTargetSelectionActive)
                             }
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding(.horizontal, 12)
@@ -1585,9 +1764,9 @@ struct ContentView: View {
                     .allowsHitTesting(true)
                 }
             }
-            // Bomb target prompt: thin top bar only (no full-screen scrim) so enemies stay tappable.
+            // Bomb skill / Throwing Knife item target prompt: thin top bar only (no full-screen scrim) so enemies stay tappable.
             .overlay(alignment: .top) {
-                if isBombTargetSelectionActive {
+                if isInventoryEnemyTargetSelectionActive {
                     HStack(spacing: 6) {
                         Text("Select target")
                             .font(.caption2.bold())
@@ -1596,7 +1775,7 @@ struct ContentView: View {
                         Spacer(minLength: 4)
                         Button {
                             withTransaction(Transaction(animation: nil)) {
-                                isBombTargetSelectionActive = false
+                                inventoryEnemyTargetItem = nil
                                 inventoryCrownDetent = 0
                             }
                         } label: {
@@ -1669,20 +1848,20 @@ struct ContentView: View {
                 isHapticFeedbackEnabled: true
             )
             .onChange(of: inventoryCrownDetent) { oldValue, newValue in
-                if !isBombTargetSelectionActive {
+                if !isInventoryEnemyTargetSelectionActive {
                     if newValue < 0.5 {
                         suppressItemsMenuOverlay = false
                     } else if newValue > oldValue, newValue > 0.5 {
                         suppressItemsMenuOverlay = false
                     }
                 }
-                // During bomb targeting, cancel when the crown moves off “closed” (user interaction).
+                // During bomb/knife target picking, cancel when the crown moves off “closed” (user interaction).
                 // Ignore settles to 0 (e.g. late 1→0 after closing Items) — those used to clear
-                // targeting immediately because bomb mode flipped on inside that window.
-                guard isBombTargetSelectionActive else { return }
+                // targeting immediately because targeting mode flipped on inside that window.
+                guard isInventoryEnemyTargetSelectionActive else { return }
                 guard newValue > 0.05 else { return }
                 withTransaction(Transaction(animation: nil)) {
-                    isBombTargetSelectionActive = false
+                    inventoryEnemyTargetItem = nil
                     inventoryCrownDetent = 0
                 }
             }
@@ -1743,18 +1922,15 @@ struct ContentView: View {
                                         isInventoryConsumePending = false
                                     }
                                 }
-                            case "Bomb":
+                            case "Throwing Knife":
                                 let sessionIdSnapshot = gameSessionId
                                 let allowedAtTap = canConsumeItems && hasLivingEnemies && stack.count > 0
                                 let closeDelay: Double = 0.25
                                 DispatchQueue.main.asyncAfter(deadline: .now() + closeDelay) {
                                     guard gameSessionId == sessionIdSnapshot else { return }
                                     guard allowedAtTap else { return }
-                                    // Don’t set `inventoryCrownDetent` here: it is already 0 from the button
-                                    // action, but re-assigning 0 can let the crown binding emit a late 1→0
-                                    // change after this runs — and `onChange` would clear bomb targeting.
                                     withTransaction(Transaction(animation: nil)) {
-                                        isBombTargetSelectionActive = true
+                                        inventoryEnemyTargetItem = .throwingKnife
                                     }
                                 }
                             default:
@@ -1868,6 +2044,8 @@ enum GameConstants {
     static let rogueDodgeFrameDuration: Double = rogueDodgeAnimationDuration / Double(rogueDodgeFrameCount)
     static let deathAnimationDuration: Double = 1.5
     static let roomWipeDuration: Double = 0.5
+    /// First room shown when starting or after a full reset.
+    static let startingRoomNumber = 1
     static let walkFrameCount = 4
     static let walkFrameDuration: Double = 0.1
     static let rogueWalkSpeedPointsPerSecond: Double = 220
@@ -1930,19 +2108,37 @@ enum GameConstants {
     static let bombGroundFrameDuration: Double = bombGroundDuration / Double(bombGroundFrameCount)
     /// 1-based frame index for damage during `BombGround`.
     static let bombGroundDamageFrame: Int = 10
-    static let bombDamageHits: Int = 2
+
+    // Throwing Knife (rogue toss + `KnifeThrown` flight).
+    static let knifeThrowFrameCount: Int = 5
+    static let knifeThrowDuration: Double = 0.5
+    static let knifeThrowFrameDuration: Double = knifeThrowDuration / Double(knifeThrowFrameCount)
+    /// 1-based frame index: projectile starts on the 5th frame of `RogueKnifeThrow`.
+    static let knifeProjectileLaunchFrame: Int = 5
+    static let knifeProjectileDuration: Double = 0.4
+    static let knifeThrownFrameCount: Int = 4
+    static let knifeThrownFrameDuration: Double = knifeProjectileDuration / Double(knifeThrownFrameCount)
+    /// In-world offset from rogue anchor to knife spawn (px).
+    static let knifeSpawnOffsetX: CGFloat = 6
     
+    // Enemy hit points (one unit per hit; crits add 2).
+    static let goblinHitsToKill = 3
+    static let orcHitsToKill = 4
+    static let slimeHitsToKill = 2
+    static let blueSlimeHitsToKill = 3
+
     // Rogue critical hits.
     static let rogueCriticalHitChance: Double = 0.16 // 16%
     
     // Floating crit text animation.
     static let critTextDuration: Double = 1.0
     // Starts 9px above the enemy sprite center.
-    // Starts 12px above the enemy sprite center (moved up 3px).
-    static let critTextBaseYOffset: CGFloat = -12
+    // Starts above the enemy sprite center (negative = up).
+    static let critTextBaseYOffset: CGFloat = -15
     static let critTextTranslateUpPx: CGFloat = 15
     static let enemyAttackPreDelay: Double = 0.25
     static let orcDieFrameCount = 8
+    static let goblinDieFrameCount = 8
     static let trollDieFrameCount = 8
     static let slimeDieFrameCount = 9
     static let cyclopsDieFrameCount = 14
@@ -1976,7 +2172,7 @@ struct OrcState {
     var dead: Bool
     var dying: Bool
     var deathStartDate: Date?
-    /// Counts down each rogue attack action (melee / shuriken / bomb). At `<= 0`, this enemy is eligible to retaliate.
+    /// Counts down each rogue attack action (melee / shuriken / bomb). Throwing Knife does not decrement this. At `<= 0`, this enemy is eligible to retaliate.
     var rogueAttacksUntilEnemyTurn: Int
 }
 
@@ -2016,7 +2212,7 @@ struct GameOverlaysView: View {
     let isCyclopsWave: Bool
     let orcCount: Int
     let orcStates: [OrcState]
-    let critTextStartDates: [Int: Date]
+    let enemyHitFloatStates: [Int: EnemyHitFloatState]
     let canTapOrcs: Bool
     let isShurikenActive: Bool
     let shurikenStartDate: Date?
@@ -2024,12 +2220,16 @@ struct GameOverlaysView: View {
     let potionDropImageName: String?
     let healEffectStartDate: Date?
     let manaRestoreEffectStartDate: Date?
-    let isBombTargetSelectionActive: Bool
+    let isInventoryEnemyTargetSelectionActive: Bool
     let isBombThrowActive: Bool
     let bombThrowStartDate: Date?
     let bombTargetIndex: Int?
     let bombProjectileStartDate: Date?
     let bombGroundStartDate: Date?
+    let isKnifeThrowActive: Bool
+    let knifeThrowStartDate: Date?
+    let knifeTargetIndex: Int?
+    let knifeProjectileStartDate: Date?
     /// Touch target size: ~28% of sprite size, at least 44pt per HIG.
     let touchTargetSize: CGFloat
     let onOrcTap: (Int) -> Void
@@ -2044,6 +2244,10 @@ struct GameOverlaysView: View {
     /// Mana index -> removal progress (0...1). Smoothly animates upward + fade-out.
     @State private var removingManaStep: [Int: Double] = [:]
     @State private var nextWaveArrowAnimationStartDate: Date = .now
+
+    private var isOrcSlotWave: Bool { !isSlimeWave && !isTrollWave && !isCyclopsWave }
+    private var isGoblinWave: Bool { isOrcSlotWave && roomNumber < 10 }
+    private var isBlueSlimeWave: Bool { isSlimeWave && roomNumber >= 10 }
 
     private func slotPosition(for index: Int) -> (x: CGFloat, y: CGFloat) {
         if isCyclopsWave {
@@ -2100,18 +2304,47 @@ struct GameOverlaysView: View {
                 }()
                 let fallbackHitsToKill: Int = {
                     if isCyclopsWave { return 8 }
-                    if isSlimeWave { return 2 }
-                    return isTrollWave ? 5 : 3
+                    if isSlimeWave { return roomNumber >= 10 ? GameConstants.blueSlimeHitsToKill : GameConstants.slimeHitsToKill }
+                    if isTrollWave { return 5 }
+                    return roomNumber >= 10 ? GameConstants.orcHitsToKill : GameConstants.goblinHitsToKill
                 }()
                 let state = index < orcStates.count ? orcStates[index] : OrcState(hitCount: 0, hitsToKill: fallbackHitsToKill, dead: true, dying: false, deathStartDate: nil, rogueAttacksUntilEnemyTurn: 0)
+                let enemyDeathName: String = {
+                    if isCyclopsWave { return "CyclopsDead" }
+                    if isSlimeWave { return isBlueSlimeWave ? "BlueSlimeDie" : "SlimeDead" }
+                    if isTrollWave { return "TrollDie" }
+                    return isGoblinWave ? "GoblinDie" : "OrcDie"
+                }()
+                let enemyDeathFrameCount: Int = {
+                    if isCyclopsWave { return GameConstants.cyclopsDieFrameCount }
+                    if isSlimeWave { return GameConstants.slimeDieFrameCount }
+                    if isTrollWave { return GameConstants.trollDieFrameCount }
+                    return isGoblinWave ? GameConstants.goblinDieFrameCount : GameConstants.orcDieFrameCount
+                }()
+                let enemyAttackName: String = {
+                    if isCyclopsWave { return "CyclopsAttack" }
+                    if isSlimeWave { return isBlueSlimeWave ? "BlueSlimeAttack" : "SlimeAttack" }
+                    if isTrollWave { return "TrollAttack" }
+                    return isGoblinWave ? "GoblinAttack" : "OrcAttack"
+                }()
+                let enemyIdleName: String = {
+                    if isCyclopsWave { return "CyclopsIdle" }
+                    if isSlimeWave { return isBlueSlimeWave ? "BlueSlimeIdle" : "SlimeIdle" }
+                    if isTrollWave { return "TrollIdle" }
+                    return isGoblinWave ? "GoblinIdle" : "OrcIdle"
+                }()
+                let enemyDamageName: String = {
+                    if isCyclopsWave { return "CyclopsDamage" }
+                    if isSlimeWave { return isBlueSlimeWave ? "BlueSlimeDamage" : "SlimeDamage" }
+                    if isTrollWave { return "TrollDamage" }
+                    return isGoblinWave ? "GoblinDamage" : "OrcDamage"
+                }()
                 if !state.dead {
                     ZStack {
                         if state.dying {
                             EnemyDeathView(
-                                name: isCyclopsWave ? "CyclopsDead" : (isSlimeWave ? "SlimeDead" : (isTrollWave ? "TrollDie" : "OrcDie")),
-                                frameCount: isCyclopsWave
-                                    ? GameConstants.cyclopsDieFrameCount
-                                    : (isSlimeWave ? GameConstants.slimeDieFrameCount : (isTrollWave ? GameConstants.trollDieFrameCount : GameConstants.orcDieFrameCount)),
+                                name: enemyDeathName,
+                                frameCount: enemyDeathFrameCount,
                                 deathStartDate: state.deathStartDate,
                                 offsetX: pos.x,
                                 offsetY: pos.y,
@@ -2121,7 +2354,7 @@ struct GameOverlaysView: View {
                             EnemySpriteView(
                                 isAttacking: activeEnemyAttackingIndex == index,
                                 enemyAttackStartDate: activeEnemyAttackStartDate,
-                                attackName: isCyclopsWave ? "CyclopsAttack" : (isSlimeWave ? "SlimeAttack" : (isTrollWave ? "TrollAttack" : "OrcAttack")),
+                                attackName: enemyAttackName,
                                 rogueOffsetX: rogueOffsetX,
                                 rogueOffsetY: rogueOffsetY,
                                 attackOffsetXAdjustment: isCyclopsWave ? 6 : 0,
@@ -2130,14 +2363,18 @@ struct GameOverlaysView: View {
                                 offsetX: pos.x,
                                 offsetY: pos.y,
                                 idleStartFrame: (isTrollWave || isSlimeWave || isCyclopsWave) ? nil : (index < Self.orcIdleStartFrames.count ? Self.orcIdleStartFrames[index] : 0),
-                                idleName: isCyclopsWave ? "CyclopsIdle" : (isSlimeWave ? "SlimeIdle" : (isTrollWave ? "TrollIdle" : "OrcIdle")),
-                                damageName: isCyclopsWave ? "CyclopsDamage" : (isSlimeWave ? "SlimeDamage" : (isTrollWave ? "TrollDamage" : "OrcDamage"))
+                                idleName: enemyIdleName,
+                                damageName: enemyDamageName
                             )
                         }
                         
-                        if let critStart = critTextStartDates[index] {
-                            CritTextView(startDate: critStart)
-                                .offset(x: pos.x + 3, y: pos.y)
+                        if let hitFloat = enemyHitFloatStates[index] {
+                            HitFloatTextView(
+                                damageAmount: hitFloat.damageAmount,
+                                showCritBang: hitFloat.showCritBang,
+                                startDate: hitFloat.startDate
+                            )
+                            .offset(x: pos.x + 3, y: pos.y)
                         }
                     }
                     .zIndex(state.dying ? 2 : (activeEnemyAttackingIndex == index ? 3 : 2))
@@ -2154,12 +2391,14 @@ struct GameOverlaysView: View {
                     rogueDodgeStartDate: rogueDodgeStartDate,
                     isBombThrowActive: isBombThrowActive,
                     bombThrowStartDate: bombThrowStartDate,
+                    isKnifeThrowActive: isKnifeThrowActive,
+                    knifeThrowStartDate: knifeThrowStartDate,
                     isShurikenActive: isShurikenActive,
                     shurikenStartDate: shurikenStartDate,
                     offsetX: rogueOffsetX,
                     offsetY: rogueOffsetY
                 )
-                .zIndex((isRogueAttacking || isShurikenActive || isBombThrowActive) ? 3 : 1)
+                .zIndex((isRogueAttacking || isShurikenActive || isBombThrowActive || isKnifeThrowActive) ? 3 : 1)
 
                 if let healStart = healEffectStartDate {
                     HealEffectView(
@@ -2210,6 +2449,19 @@ struct GameOverlaysView: View {
                 .zIndex(7)
             }
 
+            if isKnifeThrowActive, let kProjStart = knifeProjectileStartDate, let kTIdx = knifeTargetIndex {
+                let destKnife = slotPosition(for: kTIdx)
+                KnifeThrownFlightView(
+                    startDate: kProjStart,
+                    duration: GameConstants.knifeProjectileDuration,
+                    fromX: rogueOffsetX + GameConstants.knifeSpawnOffsetX,
+                    fromY: rogueOffsetY,
+                    toX: destKnife.x,
+                    toY: destKnife.y
+                )
+                .zIndex(8)
+            }
+
             GeometryReader { geo in
                 let cx = geo.size.width / 2
                 let cy = geo.size.height / 2
@@ -2232,8 +2484,9 @@ struct GameOverlaysView: View {
                         }()
                         let fallbackHitsToKill: Int = {
                             if isCyclopsWave { return 8 }
-                            if isSlimeWave { return 2 }
-                            return isTrollWave ? 5 : 3
+                            if isSlimeWave { return roomNumber >= 10 ? GameConstants.blueSlimeHitsToKill : GameConstants.slimeHitsToKill }
+                            if isTrollWave { return 5 }
+                            return roomNumber >= 10 ? GameConstants.orcHitsToKill : GameConstants.goblinHitsToKill
                         }()
                         let state = index < orcStates.count ? orcStates[index] : OrcState(hitCount: fallbackHitsToKill, hitsToKill: fallbackHitsToKill, dead: true, dying: false, deathStartDate: nil, rogueAttacksUntilEnemyTurn: 0)
                         if !state.dead, !state.dying {
@@ -2245,16 +2498,16 @@ struct GameOverlaysView: View {
                             .contentShape(Rectangle())
                             .position(x: cx + pos.x, y: cy + pos.y)
                             .disabled({
-                                if isBombTargetSelectionActive {
-                                    return isAttackInputLocked || isRogueWalking || state.hitCount >= state.hitsToKill || isBombThrowActive
+                                if isInventoryEnemyTargetSelectionActive {
+                                    return isAttackInputLocked || isRogueWalking || state.hitCount >= state.hitsToKill || isBombThrowActive || isKnifeThrowActive
                                 }
                                 return isAttackInputLocked || isRogueWalking || state.hitCount >= state.hitsToKill || !canTapOrcs
                             }())
                             .accessibilityLabel({
                                 if isCyclopsWave { return "Cyclops" }
-                                if isSlimeWave { return "Slime \(index + 1)" }
+                                if isSlimeWave { return (isBlueSlimeWave ? "Blue slime" : "Slime") + " \(index + 1)" }
                                 if isTrollWave { return "Troll \(index + 1)" }
-                                return "Orc \(index + 1)"
+                                return (isGoblinWave ? "Goblin" : "Orc") + " \(index + 1)"
                             }())
                             .accessibilityHint("Tap to attack")
                         }
@@ -2315,7 +2568,7 @@ struct GameOverlaysView: View {
                                 .interpolation(.none)
                         }
                         .buttonStyle(.plain)
-                        .disabled(isRogueAttacking || isRogueWalking || isEnemyAttackSequenceInProgress || isRogueDead || rogueDamageStartDate != nil || rogueDieStartDate != nil || isBombThrowActive || isBombTargetSelectionActive)
+                        .disabled(isRogueAttacking || isRogueWalking || isEnemyAttackSequenceInProgress || isRogueDead || rogueDamageStartDate != nil || rogueDieStartDate != nil || isBombThrowActive || isKnifeThrowActive || isInventoryEnemyTargetSelectionActive)
                         .position(
                             x: cx + arrowOffsetX + animatedOffsetX,
                             y: cy + arrowOffsetY
@@ -2513,6 +2766,62 @@ private struct BombThrownFlightView: View {
     }
 }
 
+/// `KnifeThrown` horizontal strip sizing — matches `BombThrown` pattern.
+private enum KnifeThrownAssetLayout {
+    static var stripPointSize: CGSize {
+        #if os(watchOS)
+        if let img = UIImage(named: "KnifeThrown") {
+            return img.size
+        }
+        #endif
+        return CGSize(width: 32, height: 32)
+    }
+
+    static var frameWidth: CGFloat {
+        stripPointSize.width / CGFloat(GameConstants.knifeThrownFrameCount)
+    }
+
+    static var frameHeight: CGFloat {
+        stripPointSize.height
+    }
+}
+
+private struct KnifeThrownFlightView: View {
+    let startDate: Date
+    let duration: Double
+    let fromX: CGFloat
+    let fromY: CGFloat
+    let toX: CGFloat
+    let toY: CGFloat
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: min(1.0 / 30.0, GameConstants.knifeThrownFrameDuration / 4))) { context in
+            let rawT = context.date.timeIntervalSince(startDate) / duration
+            let t = min(1, max(0, rawT))
+            let x = fromX + (toX - fromX) * t
+            let y = fromY + (toY - fromY) * t
+
+            let elapsed = context.date.timeIntervalSince(startDate)
+            let frameIndex = Int(elapsed / GameConstants.knifeThrownFrameDuration) % GameConstants.knifeThrownFrameCount
+            let fw = KnifeThrownAssetLayout.frameWidth
+            let fullW = KnifeThrownAssetLayout.stripPointSize.width
+            let h = KnifeThrownAssetLayout.frameHeight
+
+            Image("KnifeThrown")
+                .interpolation(.none)
+                .resizable()
+                .frame(width: fullW, height: h)
+                .offset(x: -CGFloat(frameIndex) * fw)
+                .frame(width: fw, height: h, alignment: .leading)
+                .clipped()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .offset(x: x, y: y)
+                .allowsHitTesting(false)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 private struct TorchView: View {
     let offsetX: CGFloat
     let offsetY: CGFloat
@@ -2623,9 +2932,15 @@ private struct ManaRestoreEffectView: View {
     }
 }
 
-private struct CritTextView: View {
+private struct HitFloatTextView: View {
+    let damageAmount: Int
+    let showCritBang: Bool
     let startDate: Date
-    
+
+    private var label: String {
+        "\(damageAmount)\(showCritBang ? "!" : "")"
+    }
+
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
             let t = context.date.timeIntervalSince(startDate)
@@ -2633,8 +2948,8 @@ private struct CritTextView: View {
                 let progress = min(max(t / GameConstants.critTextDuration, 0), 1)
                 let y = GameConstants.critTextBaseYOffset - (GameConstants.critTextTranslateUpPx * CGFloat(progress))
                 let opacity = 1.0 - progress
-                
-                Text("crit")
+
+                Text(label)
                     .font(.caption.bold())
                     .foregroundStyle(.white)
                     // Black drop shadow to keep the text readable over sprites.
@@ -2730,6 +3045,8 @@ private struct RogueSpriteOverlay: View {
     let rogueDodgeStartDate: Date?
     let isBombThrowActive: Bool
     let bombThrowStartDate: Date?
+    let isKnifeThrowActive: Bool
+    let knifeThrowStartDate: Date?
     let isShurikenActive: Bool
     let shurikenStartDate: Date?
     let offsetX: CGFloat
@@ -2744,6 +3061,7 @@ private struct RogueSpriteOverlay: View {
             if isDying { return GameConstants.rogueDieFrameDuration }
             if isTakingDamage { return GameConstants.rogueDamageFrameDuration }
             if isDodging { return GameConstants.rogueDodgeFrameDuration }
+            if isKnifeThrowActive { return GameConstants.knifeThrowFrameDuration }
             if isBombThrowActive { return GameConstants.bombThrowFrameDuration }
             if isShurikenActive { return GameConstants.shurikenFrameDuration }
             if isAttacking { return GameConstants.attackFrameDuration }
@@ -2779,6 +3097,27 @@ private struct RogueSpriteOverlay: View {
                     frameDuration: GameConstants.rogueDodgeFrameDuration,
                     loopAnimation: false
                 )
+            } else if isKnifeThrowActive, let kStart = knifeThrowStartDate {
+                let elapsed = context.date.timeIntervalSince(kStart)
+                if elapsed < GameConstants.knifeThrowDuration {
+                    SpriteSheetView(
+                        name: "RogueKnifeThrow",
+                        frameCount: GameConstants.knifeThrowFrameCount,
+                        date: context.date,
+                        animationStartDate: kStart,
+                        frameDuration: GameConstants.knifeThrowFrameDuration,
+                        loopAnimation: false
+                    )
+                } else {
+                    SpriteSheetView(
+                        name: "RogueIdle",
+                        frameCount: GameConstants.spriteFrameCount,
+                        date: context.date,
+                        animationStartDate: nil,
+                        frameDuration: GameConstants.spriteFrameDuration,
+                        loopAnimation: true
+                    )
+                }
             } else if isBombThrowActive, let bombStart = bombThrowStartDate {
                 SpriteSheetView(
                     name: "RogueBombThrow",
