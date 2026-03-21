@@ -10,6 +10,7 @@
 		BF2CE3522F65254700C5FF8D /* Bit Battler Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = BF2CE3512F65254700C5FF8D /* Bit Battler Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		BF2CE3572F65254700C5FF8D /* Bit_BattlerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2CE3562F65254700C5FF8D /* Bit_BattlerApp.swift */; };
 		BF2CE3592F65254700C5FF8D /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2CE3582F65254700C5FF8D /* ContentView.swift */; };
+		BF2CE3C12F65254800C5FF91 /* EnemiesConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2CE3C02F65254800C5FF91 /* EnemiesConstants.swift */; };
 		BF2CE35B2F65254800C5FF8D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BF2CE35A2F65254800C5FF8D /* Assets.xcassets */; };
 		BF2CE35E2F65254800C5FF8D /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BF2CE35D2F65254800C5FF8D /* Preview Assets.xcassets */; };
 		BF2CE3682F65254800C5FF8D /* Bit_Battler_Watch_AppTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2CE3672F65254800C5FF8D /* Bit_Battler_Watch_AppTests.swift */; };
@@ -61,6 +62,7 @@
 		BF2CE3512F65254700C5FF8D /* Bit Battler Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Bit Battler Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		BF2CE3562F65254700C5FF8D /* Bit_BattlerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bit_BattlerApp.swift; sourceTree = "<group>"; };
 		BF2CE3582F65254700C5FF8D /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		BF2CE3C02F65254800C5FF91 /* EnemiesConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnemiesConstants.swift; sourceTree = "<group>"; };
 		BF2CE35A2F65254800C5FF8D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		BF2CE35D2F65254800C5FF8D /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		BF2CE3632F65254800C5FF8D /* Bit Battler Watch AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Bit Battler Watch AppTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -126,6 +128,7 @@
 				BF2CE3B22F65254800C5FF90 /* Info.plist */,
 				BF2CE3562F65254700C5FF8D /* Bit_BattlerApp.swift */,
 				BF2CE3582F65254700C5FF8D /* ContentView.swift */,
+				BF2CE3C02F65254800C5FF91 /* EnemiesConstants.swift */,
 				BF2CE3922F65254800C5FF90 /* Bit Battler Watch App.entitlements */,
 				BF2CE3B02F65254800C5FF90 /* PressStart2P-Regular.ttf */,
 				BF2CE35A2F65254800C5FF8D /* Assets.xcassets */,
@@ -326,6 +329,7 @@
 			files = (
 				BF2CE3572F65254700C5FF8D /* Bit_BattlerApp.swift in Sources */,
 				BF2CE3592F65254700C5FF8D /* ContentView.swift in Sources */,
+				BF2CE3C12F65254800C5FF91 /* EnemiesConstants.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

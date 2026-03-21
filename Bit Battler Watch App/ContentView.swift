@@ -189,6 +189,31 @@ private enum InventoryEnemyTargetItem: Equatable {
     case throwingKnife
 }
 
+/// Long-press detail sheet for inventory items and skills (Items / Skills menus).
+private struct ItemOrSkillDetailPayload: Equatable {
+    let title: String
+    let description: String
+}
+
+private enum InventoryItemAndSkillDescriptions {
+    static func description(forInventoryItem name: String) -> String? {
+        switch name {
+        case "Sm Health Pot": return "Restores 1 HP"
+        case "Sm Mana Pot": return "Restores 1 mana"
+        case "Throwing Knife": return "Make a free attack at 2 damage"
+        default: return nil
+        }
+    }
+
+    static func description(forSkill name: String) -> String? {
+        switch name {
+        case "Shuriken": return "Strike every enemy for 1 damage"
+        case "Bomb": return "Strike an enemy for 2 damage and reset their initiative"
+        default: return nil
+        }
+    }
+}
+
 struct EnemyHitFloatState: Equatable {
     let startDate: Date
     let damageAmount: Int
@@ -206,13 +231,13 @@ struct ContentView: View {
     @State private var roomWipeProgress: CGFloat = 1
     @State private var rogueOffsetX: CGFloat = GameConstants.rogueIdleOffsetX
     @State private var rogueOffsetY: CGFloat = GameConstants.rogueIdleOffsetY
-    @State private var damagedOrcIndex: Int? = nil
-    @State private var orcDamageStartDate: Date? = nil
+    @State private var damagedEnemyIndex: Int? = nil
+    @State private var enemyDamageStartDate: Date? = nil
     @State private var isTrollWave: Bool = false
     @State private var isSlimeWave: Bool = false
     @State private var isCyclopsWave: Bool = false
-    @State private var orcCount: Int = 2
-    @State private var orcStates: [OrcState] = []
+    @State private var enemyCount: Int = 2
+    @State private var enemyStates: [EnemyState] = []
     @State private var totalHitsUsed: Int = 0
     @State private var showResetConfirmation = false
     @State private var showGameOverPopup = false
@@ -244,6 +269,9 @@ struct ContentView: View {
 
     // Skills.
     @State private var showSkillSheet: Bool = false
+    @State private var itemOrSkillDetail: ItemOrSkillDetailPayload? = nil
+    @State private var skillToastMessage: String? = nil
+    @State private var skillToastDismissId = UUID()
     @State private var shurikenStartDate: Date? = nil
     @State private var isShurikenActive: Bool = false
     @State private var shurikenDamageApplied: Bool = false
@@ -270,7 +298,7 @@ struct ContentView: View {
     @State private var knifeTargetIndex: Int? = nil
     @State private var knifeProjectileStartDate: Date? = nil
 
-    // Enemy auto-attacks (per-enemy readiness in `OrcState.rogueAttacksUntilEnemyTurn`).
+    // Enemy auto-attacks (per-enemy readiness in `EnemyState.rogueAttacksUntilEnemyTurn`).
     @State private var isEnemyAttackSequenceInProgress: Bool = false
     @State private var enemyAttackQueue: [Int] = []
     @State private var enemyAttackQueuePosition: Int = 0
@@ -279,16 +307,26 @@ struct ContentView: View {
     /// Enemy retaliation phases queued by rogue attacks.
     @State private var pendingEnemyAttackPhases: Int = 0
 
-    /// `roll == 0` wave: goblin art in rooms 1–9, orc art from room 10+.
-    private var isOrcSlotWave: Bool {
+    /// `roll == 0` wave: goblin art in rooms 1–9, Orc enemy art from room 10+.
+    private var isPrimaryEnemySlotWave: Bool {
         !isSlimeWave && !isTrollWave && !isCyclopsWave
     }
 
     private var isGoblinWave: Bool {
-        isOrcSlotWave && roomNumber < 10
+        isPrimaryEnemySlotWave && roomNumber < 10
     }
 
-    private var canTapOrcs: Bool {
+    /// Primary slot (roll 0), room 10+: the Orc enemy type (group of 3, four hits, Orc* assets).
+    private var isOrcEnemyWave: Bool {
+        isPrimaryEnemySlotWave && roomNumber >= 10
+    }
+
+    /// Single source for wave combat + art after room flags are set (`resetEnemies` updates those flags first).
+    private var enemyWaveProfile: EnemyWaveProfile {
+        EnemyWaveProfile.resolve(isSlimeWave: isSlimeWave, isTrollWave: isTrollWave, isCyclopsWave: isCyclopsWave, roomNumber: roomNumber)
+    }
+
+    private var canTapEnemies: Bool {
         // HealthKit has been removed from this app; attacks are no longer limited by step count.
         return !isBombThrowActive
             && !isKnifeThrowActive
@@ -303,7 +341,7 @@ struct ContentView: View {
     }
 
     private func playLightHeartLostHaptic() {
-        // Lightweight feedback for "Rogue was hit and lost a heart".
+        // Lightweight `.click` for rogue taking damage, and for critical hits when enemy damage starts.
         #if os(watchOS)
         WKInterfaceDevice.current().play(.click)
         #endif
@@ -486,11 +524,11 @@ struct ContentView: View {
         }
     }
 
-    private var orcDamageDelay: Double {
+    private var enemyDamageDelay: Double {
         3 * GameConstants.attackFrameDuration
     }
 
-    private var orcDamageDuration: Double {
+    private var enemyDamageDuration: Double {
         Double(GameConstants.attackFrameCount) * GameConstants.attackFrameDuration
     }
 
@@ -498,33 +536,12 @@ struct ContentView: View {
         0.01
     }
 
-    private var orcDieDuration: Double {
-        // Cyclops death has a longer sprite timeline (14 frames total).
-        if isCyclopsWave {
-            return Double(GameConstants.cyclopsDieFrameCount) * GameConstants.deathFrameDuration
-        }
-        if isSlimeWave {
-            return Double(GameConstants.slimeDieFrameCount) * GameConstants.deathFrameDuration
-        }
-        if isGoblinWave {
-            return Double(GameConstants.goblinDieFrameCount) * GameConstants.deathFrameDuration
-        }
-        return GameConstants.deathAnimationDuration
+    private var enemyDeathAnimationDuration: Double {
+        enemyWaveProfile.deathAnimationDuration
     }
 
     private func enemyPosition(index: Int) -> (x: CGFloat, y: CGFloat) {
-        if isCyclopsWave {
-            return GameConstants.cyclopsPosition
-        }
-        if isSlimeWave {
-            let safeIndex = max(0, min(index, GameConstants.slimePositions.count - 1))
-            return GameConstants.slimePositions[safeIndex]
-        }
-        if isTrollWave {
-            let safeIndex = max(0, min(index, GameConstants.trollPositions.count - 1))
-            return GameConstants.trollPositions[safeIndex]
-        }
-        return GameConstants.orcPosition(index: index, orcCount: orcCount)
+        enemyWaveProfile.position(index: index, enemyCount: enemyCount)
     }
 
     private func wipeToNextWaveAndReset() {
@@ -544,9 +561,9 @@ struct ContentView: View {
         // Reset while fully covered (midpoint of travel).
         DispatchQueue.main.asyncAfter(deadline: .now() + wipeDuration / 2) {
             withTransaction(Transaction(animation: nil)) {
-                resetOrcs()
+                resetEnemies()
                 roomNumber += 1
-                // New room: reset pending enemy retaliation (per-enemy cadence reset in `resetOrcs`).
+                // New room: reset pending enemy retaliation (per-enemy cadence reset in `resetEnemies`).
                 pendingEnemyAttackPhases = 0
                 isEnemyAttackSequenceInProgress = false
                 enemyAttackQueue = []
@@ -640,11 +657,11 @@ struct ContentView: View {
         }
     }
 
-    private func resetOrcs() {
+    private func resetEnemies() {
         // New enemy wave types:
         // - Slime: 4 enemies; 2 hits (green) until room 10+, then blue slimes with 3 hits each
         // - Cyclops: 1 enemy, 8 hits, death animation spans 14 frames
-        // - Orc slot (roll 0): 3 goblins (rooms 1–9, 3+ hits) or 3 orcs (room 10+, 4+ hits)
+        // - Primary enemy slot (roll 0): 3 goblins (rooms 1–9) or 3 Orc enemies (room 10+, 4 hits each)
         // - Trolls: existing wave logic
         let roll = Int.random(in: 0..<4)
         isSlimeWave = roll == 2
@@ -652,26 +669,12 @@ struct ContentView: View {
 
         isTrollWave = roll == 1
 
-        switch roll {
-        case 0: // Orc slot: goblins early, orcs from room 10
-            orcCount = 3
-        case 1: // Trolls
-            orcCount = 2
-        case 2: // Slime
-            orcCount = 4
-        default: // Cyclops
-            orcCount = 1
-        }
+        enemyCount = EnemiesConstants.enemyCount(forWaveRoll: roll)
 
-        let hitsToKill: Int = {
-            if isCyclopsWave { return 8 }
-            if isSlimeWave { return roomNumber >= 10 ? GameConstants.blueSlimeHitsToKill : GameConstants.slimeHitsToKill }
-            if isTrollWave { return 5 }
-            return roomNumber >= 10 ? GameConstants.orcHitsToKill : GameConstants.goblinHitsToKill
-        }()
+        let hitsToKill = enemyWaveProfile.hitsToKill
 
-        orcStates = (0..<orcCount).map { _ in
-            OrcState(
+        enemyStates = (0..<enemyCount).map { _ in
+            EnemyState(
                 hitCount: 0,
                 hitsToKill: hitsToKill,
                 dead: false,
@@ -684,8 +687,8 @@ struct ContentView: View {
         // Clear transient per-enemy text overlays between waves.
         enemyHitFloatStates.removeAll()
         
-        damagedOrcIndex = nil
-        orcDamageStartDate = nil
+        damagedEnemyIndex = nil
+        enemyDamageStartDate = nil
 
         // Reset potion tracking for the new wave.
         potionDropEnemyIndex = nil
@@ -705,10 +708,7 @@ struct ContentView: View {
     }
 
     private var currentEnemyHitChance: Double {
-        if isSlimeWave { return 0.33 }
-        if isTrollWave { return 0.45 }
-        if isCyclopsWave { return 0.55 }
-        return 0.40 // Orcs
+        enemyWaveProfile.enemyHitChance
     }
 
     private func maybeStartPendingEnemyAttack(forSession sessionId: UUID) {
@@ -722,10 +722,10 @@ struct ContentView: View {
         guard rogueDieStartDate == nil else { return }
 
         // Delay enemy retaliation until any in-flight enemy damage animation from the last rogue hits completes.
-        if damagedOrcIndex != nil || orcDamageStartDate != nil {
-            if let start = orcDamageStartDate {
+        if damagedEnemyIndex != nil || enemyDamageStartDate != nil {
+            if let start = enemyDamageStartDate {
                 let elapsed = Date().timeIntervalSince(start)
-                let remaining = max(0, orcDamageDuration - elapsed)
+                let remaining = max(0, enemyDamageDuration - elapsed)
                 DispatchQueue.main.asyncAfter(deadline: .now() + remaining + 0.02) {
                     maybeStartPendingEnemyAttack(forSession: sessionId)
                 }
@@ -742,11 +742,11 @@ struct ContentView: View {
 
     /// Rogue melee, shuriken, and bomb each count as one "attack action" for every living enemy's retaliation timer (Throwing Knife does not).
     private func applyRogueAttackActionAdvancingEnemyTurns() {
-        for i in 0..<orcStates.count {
-            guard !orcStates[i].dead && !orcStates[i].dying else { continue }
-            orcStates[i].rogueAttacksUntilEnemyTurn -= 1
+        for i in 0..<enemyStates.count {
+            guard !enemyStates[i].dead && !enemyStates[i].dying else { continue }
+            enemyStates[i].rogueAttacksUntilEnemyTurn -= 1
         }
-        let anyReady = orcStates.contains { !$0.dead && !$0.dying && $0.rogueAttacksUntilEnemyTurn <= 0 }
+        let anyReady = enemyStates.contains { !$0.dead && !$0.dying && $0.rogueAttacksUntilEnemyTurn <= 0 }
         if anyReady {
             pendingEnemyAttackPhases += 1
         }
@@ -755,8 +755,8 @@ struct ContentView: View {
     private func startEnemyAttackSequence(forSession sessionId: UUID) {
         guard gameSessionId == sessionId else { return }
         guard !isRogueDead else { return }
-        let ready: [Int] = (0..<orcStates.count).filter { i in
-            !orcStates[i].dead && !orcStates[i].dying && orcStates[i].rogueAttacksUntilEnemyTurn <= 0
+        let ready: [Int] = (0..<enemyStates.count).filter { i in
+            !enemyStates[i].dead && !enemyStates[i].dying && enemyStates[i].rogueAttacksUntilEnemyTurn <= 0
         }.sorted()
         guard !ready.isEmpty else {
             pendingEnemyAttackPhases = max(0, pendingEnemyAttackPhases - 1)
@@ -796,11 +796,11 @@ struct ContentView: View {
         let enemyIndex = enemyAttackQueue[enemyAttackQueuePosition]
         enemyAttackQueuePosition += 1
 
-        guard enemyIndex >= 0, enemyIndex < orcStates.count else {
+        guard enemyIndex >= 0, enemyIndex < enemyStates.count else {
             attackNextEnemy(forSession: sessionId)
             return
         }
-        guard !orcStates[enemyIndex].dead, !orcStates[enemyIndex].dying else {
+        guard !enemyStates[enemyIndex].dead, !enemyStates[enemyIndex].dying else {
             attackNextEnemy(forSession: sessionId)
             return
         }
@@ -859,8 +859,8 @@ struct ContentView: View {
                         if !isRogueDyingAfterHit {
                             rogueOffsetX = GameConstants.rogueIdleOffsetX
                         }
-                        if enemyIndex < orcStates.count, !orcStates[enemyIndex].dead {
-                            orcStates[enemyIndex].rogueAttacksUntilEnemyTurn = GameConstants.rogueAttacksPerEnemyAttackCycle
+                        if enemyIndex < enemyStates.count, !enemyStates[enemyIndex].dead {
+                            enemyStates[enemyIndex].rogueAttacksUntilEnemyTurn = GameConstants.rogueAttacksPerEnemyAttackCycle
                         }
                     }
 
@@ -880,8 +880,8 @@ struct ContentView: View {
                         rogueDodgeStartDate = nil
                         // Snap back immediately after the dodge window completes.
                         rogueOffsetX = GameConstants.rogueIdleOffsetX
-                        if enemyIndex < orcStates.count, !orcStates[enemyIndex].dead {
-                            orcStates[enemyIndex].rogueAttacksUntilEnemyTurn = GameConstants.rogueAttacksPerEnemyAttackCycle
+                        if enemyIndex < enemyStates.count, !enemyStates[enemyIndex].dead {
+                            enemyStates[enemyIndex].rogueAttacksUntilEnemyTurn = GameConstants.rogueAttacksPerEnemyAttackCycle
                         }
                     }
                     attackNextEnemy(forSession: sessionId)
@@ -944,13 +944,13 @@ struct ContentView: View {
         rogueOffsetX = GameConstants.rogueIdleOffsetX
         rogueOffsetY = GameConstants.rogueIdleOffsetY
 
-        damagedOrcIndex = nil
-        orcDamageStartDate = nil
+        damagedEnemyIndex = nil
+        enemyDamageStartDate = nil
 
         isTrollWave = false
         isSlimeWave = false
         isCyclopsWave = false
-        orcCount = 2
+        enemyCount = 2
 
         // Reset inventory + potion tracking.
         inventoryStacks = []
@@ -975,12 +975,15 @@ struct ContentView: View {
         knifeProjectileStartDate = nil
 
         showSkillSheet = false
+        itemOrSkillDetail = nil
+        skillToastMessage = nil
+        skillToastDismissId = UUID()
         shurikenStartDate = nil
         isShurikenActive = false
         shurikenDamageApplied = false
         enemyHitFloatStates.removeAll()
 
-        resetOrcs()
+        resetEnemies()
     }
 
     private func returnToTitleScreenResettingGame() {
@@ -1027,7 +1030,31 @@ struct ContentView: View {
     }
 
     private var hasLivingEnemies: Bool {
-        orcStates.contains { !$0.dead && !$0.dying }
+        enemyStates.contains { !$0.dead && !$0.dying }
+    }
+
+    /// Shuriken / Bomb: used for tap gating + dimmed appearance. Kept non-`.disabled` so long-press (description) always receives gestures.
+    private var canUseManaSkills: Bool {
+        hasLivingEnemies && manaRemaining > 0 && !isBombThrowActive && !isKnifeThrowActive && !isInventoryEnemyTargetSelectionActive
+    }
+
+    /// When false, `canUseManaSkills` may be false for several reasons; this isolates "out of mana" for feedback.
+    private var manaSkillsUnavailableOnlyDueToMana: Bool {
+        hasLivingEnemies && manaRemaining == 0 && !isBombThrowActive && !isKnifeThrowActive && !isInventoryEnemyTargetSelectionActive
+    }
+
+    private func presentSkillToast(_ message: String, duration: TimeInterval = 1.8) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            skillToastMessage = message
+        }
+        let dismissId = UUID()
+        skillToastDismissId = dismissId
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            guard skillToastDismissId == dismissId else { return }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                skillToastMessage = nil
+            }
+        }
     }
 
     private func startBombThrow(targetIndex index: Int) {
@@ -1036,8 +1063,8 @@ struct ContentView: View {
         guard !isKnifeThrowActive else { return }
         guard !isShurikenActive else { return }
         guard !isRogueWalking else { return }
-        guard index >= 0, index < orcStates.count else { return }
-        guard !orcStates[index].dead, !orcStates[index].dying else { return }
+        guard index >= 0, index < enemyStates.count else { return }
+        guard !enemyStates[index].dead, !enemyStates[index].dying else { return }
         guard manaRemaining > 0 else {
             withTransaction(Transaction(animation: nil)) {
                 inventoryEnemyTargetItem = nil
@@ -1069,7 +1096,7 @@ struct ContentView: View {
         let projLand = projLaunch + GameConstants.bombProjectileDuration
         let damageTime = projLand + Double(GameConstants.bombGroundDamageFrame - 1) * GameConstants.bombGroundFrameDuration
         let groundEnd = projLand + GameConstants.bombGroundDuration
-        let unlockTime = damageTime + orcDamageDuration
+        let unlockTime = damageTime + enemyDamageDuration
 
         DispatchQueue.main.asyncAfter(deadline: .now() + projLaunch) {
             guard gameSessionId == sessionId else { return }
@@ -1089,36 +1116,39 @@ struct ContentView: View {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + damageTime) {
             guard gameSessionId == sessionId else { return }
-            guard index < orcStates.count else { return }
-            guard !orcStates[index].dead, !orcStates[index].dying else { return }
+            guard index < enemyStates.count else { return }
+            guard !enemyStates[index].dead, !enemyStates[index].dying else { return }
 
             let didBombCrit = Double.random(in: 0..<1) < GameConstants.rogueCriticalHitChance
-            orcStates[index].hitCount += didBombCrit ? 3 : 2
+            enemyStates[index].hitCount += didBombCrit ? 3 : 2
             // Stun: only the bombed enemy's retaliation tally resets.
-            orcStates[index].rogueAttacksUntilEnemyTurn = GameConstants.rogueAttacksPerEnemyAttackCycle
+            enemyStates[index].rogueAttacksUntilEnemyTurn = GameConstants.rogueAttacksPerEnemyAttackCycle
 
             withTransaction(Transaction(animation: nil)) {
-                damagedOrcIndex = index
-                orcDamageStartDate = Date()
+                damagedEnemyIndex = index
+                enemyDamageStartDate = Date()
                 let dmg = didBombCrit ? 3 : 2
+                if didBombCrit {
+                    playLightHeartLostHaptic()
+                }
                 triggerEnemyHitFloat(forEnemyIndex: index, damageAmount: dmg, showCritBang: didBombCrit, startDate: Date(), forSession: sessionId)
             }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + orcDamageDuration) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + enemyDamageDuration) {
                 guard gameSessionId == sessionId else { return }
                 withTransaction(Transaction(animation: nil)) {
-                    damagedOrcIndex = nil
-                    orcDamageStartDate = nil
+                    damagedEnemyIndex = nil
+                    enemyDamageStartDate = nil
                 }
-                if orcStates[index].hitCount >= orcStates[index].hitsToKill, !orcStates[index].dead, !orcStates[index].dying {
-                    let isLastDyingStart = orcStates.enumerated().allSatisfy { (i, s) in
+                if enemyStates[index].hitCount >= enemyStates[index].hitsToKill, !enemyStates[index].dead, !enemyStates[index].dying {
+                    let isLastDyingStart = enemyStates.enumerated().allSatisfy { (i, s) in
                         if i == index { return true }
                         return s.dead || s.dying
                     }
 
                     withTransaction(Transaction(animation: nil)) {
-                        orcStates[index].dying = true
-                        orcStates[index].deathStartDate = Date()
+                        enemyStates[index].dying = true
+                        enemyStates[index].deathStartDate = Date()
                     }
 
                     if isLastDyingStart {
@@ -1130,12 +1160,12 @@ struct ContentView: View {
                         }
                     }
 
-                    DispatchQueue.main.asyncAfter(deadline: .now() + orcDieDuration) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + enemyDeathAnimationDuration) {
                         guard gameSessionId == sessionId else { return }
                         withTransaction(Transaction(animation: nil)) {
-                            orcStates[index].dead = true
-                            orcStates[index].dying = false
-                            orcStates[index].deathStartDate = nil
+                            enemyStates[index].dead = true
+                            enemyStates[index].dying = false
+                            enemyStates[index].deathStartDate = nil
                         }
 
                         if isLastDyingStart {
@@ -1173,8 +1203,8 @@ struct ContentView: View {
         guard !isBombThrowActive else { return }
         guard !isKnifeThrowActive else { return }
         guard !isRogueWalking else { return }
-        guard index >= 0, index < orcStates.count else { return }
-        guard !orcStates[index].dead, !orcStates[index].dying else { return }
+        guard index >= 0, index < enemyStates.count else { return }
+        guard !enemyStates[index].dead, !enemyStates[index].dying else { return }
         guard consumeThrowingKnifeStack() else {
             withTransaction(Transaction(animation: nil)) {
                 inventoryEnemyTargetItem = nil
@@ -1199,7 +1229,7 @@ struct ContentView: View {
 
         let projLaunch = Double(GameConstants.knifeProjectileLaunchFrame - 1) * GameConstants.knifeThrowFrameDuration
         let damageTime = projLaunch + GameConstants.knifeProjectileDuration
-        let unlockTime = damageTime + orcDamageDuration
+        let unlockTime = damageTime + enemyDamageDuration
 
         DispatchQueue.main.asyncAfter(deadline: .now() + projLaunch) {
             guard gameSessionId == sessionId else { return }
@@ -1211,33 +1241,33 @@ struct ContentView: View {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + damageTime) {
             guard gameSessionId == sessionId else { return }
-            guard index < orcStates.count else { return }
-            guard !orcStates[index].dead, !orcStates[index].dying else { return }
+            guard index < enemyStates.count else { return }
+            guard !enemyStates[index].dead, !enemyStates[index].dying else { return }
 
-            orcStates[index].hitCount += 2
+            enemyStates[index].hitCount += 2
 
             withTransaction(Transaction(animation: nil)) {
                 knifeProjectileStartDate = nil
-                damagedOrcIndex = index
-                orcDamageStartDate = Date()
+                damagedEnemyIndex = index
+                enemyDamageStartDate = Date()
                 triggerEnemyHitFloat(forEnemyIndex: index, damageAmount: 2, showCritBang: false, startDate: Date(), forSession: sessionId)
             }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + orcDamageDuration) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + enemyDamageDuration) {
                 guard gameSessionId == sessionId else { return }
                 withTransaction(Transaction(animation: nil)) {
-                    damagedOrcIndex = nil
-                    orcDamageStartDate = nil
+                    damagedEnemyIndex = nil
+                    enemyDamageStartDate = nil
                 }
-                if orcStates[index].hitCount >= orcStates[index].hitsToKill, !orcStates[index].dead, !orcStates[index].dying {
-                    let isLastDyingStart = orcStates.enumerated().allSatisfy { (i, s) in
+                if enemyStates[index].hitCount >= enemyStates[index].hitsToKill, !enemyStates[index].dead, !enemyStates[index].dying {
+                    let isLastDyingStart = enemyStates.enumerated().allSatisfy { (i, s) in
                         if i == index { return true }
                         return s.dead || s.dying
                     }
 
                     withTransaction(Transaction(animation: nil)) {
-                        orcStates[index].dying = true
-                        orcStates[index].deathStartDate = Date()
+                        enemyStates[index].dying = true
+                        enemyStates[index].deathStartDate = Date()
                     }
 
                     if isLastDyingStart {
@@ -1249,12 +1279,12 @@ struct ContentView: View {
                         }
                     }
 
-                    DispatchQueue.main.asyncAfter(deadline: .now() + orcDieDuration) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + enemyDeathAnimationDuration) {
                         guard gameSessionId == sessionId else { return }
                         withTransaction(Transaction(animation: nil)) {
-                            orcStates[index].dead = true
-                            orcStates[index].dying = false
-                            orcStates[index].deathStartDate = nil
+                            enemyStates[index].dead = true
+                            enemyStates[index].dying = false
+                            enemyStates[index].deathStartDate = nil
                         }
 
                         if isLastDyingStart {
@@ -1311,41 +1341,48 @@ struct ContentView: View {
             }
 
             var killedIndices: [Int] = []
+            var shurikenHadAnyCrit = false
 
-            for i in 0..<orcStates.count {
-                guard !orcStates[i].dead, !orcStates[i].dying else { continue }
+            for i in 0..<enemyStates.count {
+                guard !enemyStates[i].dead, !enemyStates[i].dying else { continue }
                 
                 let didCrit = Double.random(in: 0..<1) < GameConstants.rogueCriticalHitChance
+                if didCrit {
+                    shurikenHadAnyCrit = true
+                }
                 let dmg = didCrit ? 2 : 1
-                orcStates[i].hitCount += dmg
+                enemyStates[i].hitCount += dmg
                 triggerEnemyHitFloat(forEnemyIndex: i, damageAmount: dmg, showCritBang: didCrit, startDate: Date(), forSession: sessionId)
 
-                if orcStates[i].hitCount >= orcStates[i].hitsToKill {
+                if enemyStates[i].hitCount >= enemyStates[i].hitsToKill {
                     killedIndices.append(i)
                 }
             }
 
             withTransaction(Transaction(animation: nil)) {
-                damagedOrcIndex = nil
-                orcDamageStartDate = Date()
+                damagedEnemyIndex = nil
+                enemyDamageStartDate = Date()
+                if shurikenHadAnyCrit {
+                    playLightHeartLostHaptic()
+                }
             }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + orcDamageDuration) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + enemyDamageDuration) {
                 guard gameSessionId == sessionId else { return }
                 withTransaction(Transaction(animation: nil)) {
-                    orcDamageStartDate = nil
+                    enemyDamageStartDate = nil
                 }
 
                 if !killedIndices.isEmpty {
-                    let allRemainingDie = orcStates.enumerated().allSatisfy { (i, s) in
+                    let allRemainingDie = enemyStates.enumerated().allSatisfy { (i, s) in
                         s.dead || s.dying || killedIndices.contains(i)
                     }
                     let potionDropIndex = allRemainingDie ? killedIndices.first : nil
 
                     for idx in killedIndices {
                         withTransaction(Transaction(animation: nil)) {
-                            orcStates[idx].dying = true
-                            orcStates[idx].deathStartDate = Date()
+                            enemyStates[idx].dying = true
+                            enemyStates[idx].deathStartDate = Date()
                         }
                     }
 
@@ -1358,13 +1395,13 @@ struct ContentView: View {
                         }
                     }
 
-                    DispatchQueue.main.asyncAfter(deadline: .now() + orcDieDuration) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + enemyDeathAnimationDuration) {
                         guard gameSessionId == sessionId else { return }
                         for idx in killedIndices {
                             withTransaction(Transaction(animation: nil)) {
-                                orcStates[idx].dead = true
-                                orcStates[idx].dying = false
-                                orcStates[idx].deathStartDate = nil
+                                enemyStates[idx].dead = true
+                                enemyStates[idx].dying = false
+                                enemyStates[idx].deathStartDate = nil
                             }
                         }
 
@@ -1391,16 +1428,16 @@ struct ContentView: View {
         }
     }
 
-    private func startRogueAttack(atPosition x: CGFloat, y: CGFloat, orcIndex: Int?) {
+    private func startRogueAttack(atPosition x: CGFloat, y: CGFloat, enemyIndex: Int?) {
         let sessionId = gameSessionId
         guard !isAttackInputLocked else { return }
         guard !isRogueWalking else { return }
-        guard canTapOrcs else { return }
-        guard let index = orcIndex, index >= 0, index < orcStates.count else { return }
-        guard !orcStates[index].dead else { return }
+        guard canTapEnemies else { return }
+        guard let index = enemyIndex, index >= 0, index < enemyStates.count else { return }
+        guard !enemyStates[index].dead else { return }
         
         let didCrit = Double.random(in: 0..<1) < GameConstants.rogueCriticalHitChance
-        orcStates[index].hitCount += didCrit ? 2 : 1
+        enemyStates[index].hitCount += didCrit ? 2 : 1
         applyRogueAttackActionAdvancingEnemyTurns()
         totalHitsUsed += 1
         withTransaction(Transaction(animation: nil)) {
@@ -1410,29 +1447,32 @@ struct ContentView: View {
             isRogueAttacking = true
             isAttackInputLocked = true
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + orcDamageDelay) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + enemyDamageDelay) {
             withTransaction(Transaction(animation: nil)) {
-                damagedOrcIndex = index
-                orcDamageStartDate = Date()
+                damagedEnemyIndex = index
+                enemyDamageStartDate = Date()
                 let dmg = didCrit ? 2 : 1
+                if didCrit {
+                    playLightHeartLostHaptic()
+                }
                 triggerEnemyHitFloat(forEnemyIndex: index, damageAmount: dmg, showCritBang: didCrit, startDate: Date(), forSession: sessionId)
             }
         }
-            DispatchQueue.main.asyncAfter(deadline: .now() + orcDamageDelay + orcDamageDuration) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + enemyDamageDelay + enemyDamageDuration) {
             withTransaction(Transaction(animation: nil)) {
-                damagedOrcIndex = nil
-                orcDamageStartDate = nil
+                damagedEnemyIndex = nil
+                enemyDamageStartDate = nil
             }
-            if orcStates[index].hitCount >= orcStates[index].hitsToKill, !orcStates[index].dead, !orcStates[index].dying {
+            if enemyStates[index].hitCount >= enemyStates[index].hitsToKill, !enemyStates[index].dead, !enemyStates[index].dying {
                 // The "last enemy" is the one that enters its dying state last.
-                let isLastDyingStart = orcStates.enumerated().allSatisfy { (i, s) in
+                let isLastDyingStart = enemyStates.enumerated().allSatisfy { (i, s) in
                     if i == index { return true }
                     return s.dead || s.dying
                 }
 
                 withTransaction(Transaction(animation: nil)) {
-                    orcStates[index].dying = true
-                    orcStates[index].deathStartDate = Date()
+                    enemyStates[index].dying = true
+                    enemyStates[index].deathStartDate = Date()
                 }
 
                 if isLastDyingStart {
@@ -1444,11 +1484,11 @@ struct ContentView: View {
                     }
                 }
 
-                DispatchQueue.main.asyncAfter(deadline: .now() + orcDieDuration) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + enemyDeathAnimationDuration) {
                     withTransaction(Transaction(animation: nil)) {
-                        orcStates[index].dead = true
-                        orcStates[index].dying = false
-                        orcStates[index].deathStartDate = nil
+                        enemyStates[index].dead = true
+                        enemyStates[index].dying = false
+                        enemyStates[index].deathStartDate = nil
                     }
 
                     if isLastDyingStart {
@@ -1461,7 +1501,7 @@ struct ContentView: View {
                 }
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + orcDamageDelay + orcDamageDuration + postDamageTapCooldownDuration) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + enemyDamageDelay + enemyDamageDuration + postDamageTapCooldownDuration) {
             withTransaction(Transaction(animation: nil)) {
                 isAttackInputLocked = false
             }
@@ -1641,8 +1681,8 @@ struct ContentView: View {
 #endif
             .overlay {
                 GameOverlaysView(
-                    damagedOrcIndex: damagedOrcIndex,
-                    orcDamageStartDate: orcDamageStartDate,
+                    damagedEnemyIndex: damagedEnemyIndex,
+                    enemyDamageStartDate: enemyDamageStartDate,
                     rogueOffsetX: rogueOffsetX,
                     rogueOffsetY: rogueOffsetY,
                     heartsRemaining: heartsRemaining,
@@ -1665,10 +1705,10 @@ struct ContentView: View {
                     isTrollWave: isTrollWave,
                     isSlimeWave: isSlimeWave,
                     isCyclopsWave: isCyclopsWave,
-                    orcCount: orcCount,
-                    orcStates: orcStates,
+                    enemyCount: enemyCount,
+                    enemyStates: enemyStates,
                     enemyHitFloatStates: enemyHitFloatStates,
-                    canTapOrcs: canTapOrcs,
+                    canTapEnemies: canTapEnemies,
                     isShurikenActive: isShurikenActive,
                     shurikenStartDate: shurikenStartDate,
                     potionDropEnemyIndex: potionDropEnemyIndex,
@@ -1686,7 +1726,7 @@ struct ContentView: View {
                     knifeTargetIndex: knifeTargetIndex,
                     knifeProjectileStartDate: knifeProjectileStartDate,
                     touchTargetSize: max(GameConstants.spriteFrameSize * 0.28125, GameConstants.minTouchTargetSize),
-                    onOrcTap: { index in
+                    onEnemyTap: { index in
                         if let mode = inventoryEnemyTargetItem {
                             switch mode {
                             case .bomb:
@@ -1698,13 +1738,13 @@ struct ContentView: View {
                         }
                         let pos = enemyPosition(index: index)
                         startRogueAttack(
-                            atPosition: pos.x - GameConstants.spriteFrameSize - GameConstants.rogueOrcGap + GameConstants.rogueAttackOffsetX,
+                            atPosition: pos.x - GameConstants.spriteFrameSize - GameConstants.rogueEnemyGap + GameConstants.rogueAttackOffsetX,
                             y: pos.y,
-                            orcIndex: index
+                            enemyIndex: index
                         )
                     },
                     onRogueTap: {
-                        if canTapOrcs && !isRogueAttacking && !isAttackInputLocked && !isRogueWalking && !isBombThrowActive && !isKnifeThrowActive && !isInventoryEnemyTargetSelectionActive {
+                        if canTapEnemies && !isRogueAttacking && !isAttackInputLocked && !isRogueWalking && !isBombThrowActive && !isKnifeThrowActive && !isInventoryEnemyTargetSelectionActive {
                             showSkillSheet = true
                         }
                     },
@@ -1715,6 +1755,16 @@ struct ContentView: View {
                 )
                 // Visual nudge for the playfield only — must not apply to full-screen menus or they won’t cover the full display.
                 .offset(y: -9)
+#if os(watchOS)
+                // Playfield focus steals Digital Crown / gesture routing from full-screen menus that sit above it.
+                // Turn it off whenever a menu or modal is up — including Items (`inventoryCrownDetent > 0.5`).
+                .focusable(!(
+                    showSkillSheet
+                        || showGameOverPopup
+                        || itemOrSkillDetail != nil
+                        || inventoryCrownDetent > 0.5
+                ))
+#endif
             }
             .overlay {
                 // Hide Items while choosing a bomb/knife target so the crown/detent binding can’t leave both UIs up.
@@ -1740,18 +1790,44 @@ struct ContentView: View {
                         ScrollView(.vertical) {
                             VStack(spacing: 8) {
                                 Button("Shuriken") {
+                                    if manaSkillsUnavailableOnlyDueToMana {
+                                        presentSkillToast("Not enough mana")
+                                        return
+                                    }
+                                    guard canUseManaSkills else { return }
                                     startShurikenAttack()
                                 }
                                 .buttonStyle(.bordered)
-                                .disabled(!hasLivingEnemies || manaRemaining <= 0 || isBombThrowActive || isKnifeThrowActive || isInventoryEnemyTargetSelectionActive)
+                                .opacity(canUseManaSkills ? 1 : 0.45)
+                                .highPriorityGesture(
+                                    LongPressGesture(minimumDuration: 0.45)
+                                        .onEnded { _ in
+                                            if let desc = InventoryItemAndSkillDescriptions.description(forSkill: "Shuriken") {
+                                                itemOrSkillDetail = ItemOrSkillDetailPayload(title: "Shuriken", description: desc)
+                                            }
+                                        }
+                                )
                                 Button("Bomb") {
+                                    if manaSkillsUnavailableOnlyDueToMana {
+                                        presentSkillToast("Not enough mana")
+                                        return
+                                    }
+                                    guard canUseManaSkills else { return }
                                     withTransaction(Transaction(animation: nil)) {
                                         showSkillSheet = false
                                         inventoryEnemyTargetItem = .bomb
                                     }
                                 }
                                 .buttonStyle(.bordered)
-                                .disabled(!hasLivingEnemies || manaRemaining <= 0 || isBombThrowActive || isKnifeThrowActive || isInventoryEnemyTargetSelectionActive)
+                                .opacity(canUseManaSkills ? 1 : 0.45)
+                                .highPriorityGesture(
+                                    LongPressGesture(minimumDuration: 0.45)
+                                        .onEnded { _ in
+                                            if let desc = InventoryItemAndSkillDescriptions.description(forSkill: "Bomb") {
+                                                itemOrSkillDetail = ItemOrSkillDetailPayload(title: "Bomb", description: desc)
+                                            }
+                                        }
+                                )
                             }
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding(.horizontal, 12)
@@ -1761,6 +1837,34 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea(edges: .all)
                     .zIndex(3000)
+                    .allowsHitTesting(true)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if let msg = skillToastMessage {
+                    Text(msg)
+                        .font(.caption2.bold())
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule())
+                        .padding(.bottom, 6)
+                        .allowsHitTesting(false)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+            }
+            .overlay {
+                if let detail = itemOrSkillDetail {
+                    ItemOrSkillDetailOverlay(
+                        title: detail.title,
+                        description: detail.description,
+                        onBack: { itemOrSkillDetail = nil }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea(edges: .all)
+                    .zIndex(4000)
                     .allowsHitTesting(true)
                 }
             }
@@ -1830,14 +1934,11 @@ struct ContentView: View {
                 }
             }
             .onAppear {
-                if orcStates.isEmpty {
-                    resetOrcs()
+                if enemyStates.isEmpty {
+                    resetEnemies()
                 }
             }
 #if os(watchOS)
-            // When the skills sheet (or game-over alert) is up, staying globally focusable often
-            // steals taps on watchOS, so close buttons feel “dead.” Keep focus for inventory crown.
-            .focusable(!(showSkillSheet || showGameOverPopup))
             .digitalCrownRotation(
                 detent: $inventoryCrownDetent,
                 from: 0,
@@ -1847,7 +1948,15 @@ struct ContentView: View {
                 isContinuous: false,
                 isHapticFeedbackEnabled: true
             )
+            .onChange(of: showSkillSheet) { _, newValue in
+                if !newValue {
+                    itemOrSkillDetail = nil
+                }
+            }
             .onChange(of: inventoryCrownDetent) { oldValue, newValue in
+                if oldValue >= 0.5, newValue < 0.5 {
+                    itemOrSkillDetail = nil
+                }
                 if !isInventoryEnemyTargetSelectionActive {
                     if newValue < 0.5 {
                         suppressItemsMenuOverlay = false
@@ -1892,10 +2001,10 @@ struct ContentView: View {
                 } else {
                     ForEach(inventoryStacks) { stack in
                         Button(inventoryStackButtonLabel(stack)) {
-                            dismissItemsMenu()
                             switch stack.displayName {
                             case "Sm Health Pot":
-                                guard canConsumeItems, stack.count > 0 else { return }
+                                guard inventoryStackAppearsUsable(stack) else { return }
+                                dismissItemsMenu()
                                 let sessionIdSnapshot = gameSessionId
                                 withTransaction(Transaction(animation: nil)) {
                                     isInventoryConsumePending = true
@@ -1909,7 +2018,8 @@ struct ContentView: View {
                                     }
                                 }
                             case "Sm Mana Pot":
-                                guard canConsumeItems, stack.count > 0 else { return }
+                                guard inventoryStackAppearsUsable(stack) else { return }
+                                dismissItemsMenu()
                                 let sessionIdSnapshot = gameSessionId
                                 withTransaction(Transaction(animation: nil)) {
                                     isInventoryConsumePending = true
@@ -1923,12 +2033,12 @@ struct ContentView: View {
                                     }
                                 }
                             case "Throwing Knife":
+                                guard canConsumeItems && hasLivingEnemies && stack.count > 0 else { return }
+                                dismissItemsMenu()
                                 let sessionIdSnapshot = gameSessionId
-                                let allowedAtTap = canConsumeItems && hasLivingEnemies && stack.count > 0
                                 let closeDelay: Double = 0.25
                                 DispatchQueue.main.asyncAfter(deadline: .now() + closeDelay) {
                                     guard gameSessionId == sessionIdSnapshot else { return }
-                                    guard allowedAtTap else { return }
                                     withTransaction(Transaction(animation: nil)) {
                                         inventoryEnemyTargetItem = .throwingKnife
                                     }
@@ -1938,12 +2048,16 @@ struct ContentView: View {
                             }
                         }
                         .buttonStyle(.bordered)
-                        .disabled(
-                            isInventoryConsumePending
-                            || ((stack.displayName == "Sm Health Pot" || stack.displayName == "Sm Mana Pot")
-                                && !inventoryStackAppearsUsable(stack))
-                        )
+                        .disabled(isInventoryConsumePending)
                         .opacity(inventoryStackAppearsUsable(stack) ? 1 : 0.45)
+                        .highPriorityGesture(
+                            LongPressGesture(minimumDuration: 0.45)
+                                .onEnded { _ in
+                                    if let desc = InventoryItemAndSkillDescriptions.description(forInventoryItem: stack.displayName) {
+                                        itemOrSkillDetail = ItemOrSkillDetailPayload(title: stack.displayName, description: desc)
+                                    }
+                                }
+                        )
                     }
                 }
             }
@@ -1954,6 +2068,78 @@ struct ContentView: View {
         .transaction { transaction in
             transaction.disablesAnimations = true
         }
+    }
+}
+
+// Detail screen for long-press on an item or skill row: name, description, Back to list.
+private struct ItemOrSkillDetailOverlay: View {
+    let title: String
+    let description: String
+    let onBack: () -> Void
+
+    var body: some View {
+        GeometryReader { geo in
+            let topPad = max(14, geo.safeAreaInsets.top + 6)
+            let headerReserve = topPad + 54
+
+            ZStack(alignment: .top) {
+                Rectangle()
+                    .fill(Color.black.opacity(0.52))
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                    .allowsHitTesting(true)
+
+                VStack(spacing: 0) {
+                    Color.clear
+                        .frame(height: headerReserve)
+                    ScrollView(.vertical) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(title)
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                            Text(description)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                    }
+                }
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+                .background(.ultraThinMaterial)
+
+                HStack(alignment: .center, spacing: 8) {
+                    Button(action: onBack) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 10, weight: .bold))
+                            Text("Back")
+                                .font(.caption2.bold())
+                        }
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.85), radius: 1, x: 0, y: 1)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Back")
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, topPad)
+                .padding(.bottom, 10)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .background {
+                    ZStack {
+                        Rectangle().fill(Color.black.opacity(0.12))
+                        Rectangle().fill(.ultraThinMaterial)
+                    }
+                }
+                .zIndex(20)
+                .allowsHitTesting(true)
+            }
+        }
+        .ignoresSafeArea(edges: .all)
     }
 }
 
@@ -2025,6 +2211,10 @@ private struct FullScreenMenuSheet<Content: View>: View {
             }
         }
         .ignoresSafeArea(edges: .all)
+#if os(watchOS)
+        // Prefer the menu (not the playfield under it) for crown / touch routing when this sheet is visible.
+        .focusable(true)
+#endif
     }
 }
 
@@ -2055,7 +2245,7 @@ enum GameConstants {
     static let minTouchTargetSize: CGFloat = 44
     static let rogueIdleOffsetX: CGFloat = -33
     static let rogueIdleOffsetY: CGFloat = 24
-    static let rogueOrcGap: CGFloat = 8
+    static let rogueEnemyGap: CGFloat = 8
     static let rogueAttackOffsetX: CGFloat = 75
     static let heartsInitial: Int = 5
     static let manaInitial: Int = 1
@@ -2077,7 +2267,7 @@ enum GameConstants {
     /// < 1 means the Rogue slides left faster than the dodge window duration.
     static let rogueDodgeTranslationDurationMultiplier: Double = 0.6
     /// Enemy ends up `enemyToRogueSpacingPx` to the right of the rogue during an attack.
-    static let enemyToRogueSpacingPx: CGFloat = spriteFrameSize + rogueOrcGap - rogueAttackOffsetX
+    static let enemyToRogueSpacingPx: CGFloat = spriteFrameSize + rogueEnemyGap - rogueAttackOffsetX
 
     static let rogueDamageFrameCount = 4
     static let rogueDieFrameCount = 26
@@ -2121,12 +2311,6 @@ enum GameConstants {
     /// In-world offset from rogue anchor to knife spawn (px).
     static let knifeSpawnOffsetX: CGFloat = 6
     
-    // Enemy hit points (one unit per hit; crits add 2).
-    static let goblinHitsToKill = 3
-    static let orcHitsToKill = 4
-    static let slimeHitsToKill = 2
-    static let blueSlimeHitsToKill = 3
-
     // Rogue critical hits.
     static let rogueCriticalHitChance: Double = 0.16 // 16%
     
@@ -2137,36 +2321,10 @@ enum GameConstants {
     static let critTextBaseYOffset: CGFloat = -15
     static let critTextTranslateUpPx: CGFloat = 15
     static let enemyAttackPreDelay: Double = 0.25
-    static let orcDieFrameCount = 8
-    static let goblinDieFrameCount = 8
-    static let trollDieFrameCount = 8
-    static let slimeDieFrameCount = 9
-    static let cyclopsDieFrameCount = 14
-    static let deathFrameDuration: Double = deathAnimationDuration / Double(orcDieFrameCount)
-    /// Positions (offsetX, offsetY) for up to 3 orcs.
-    static let orcPositions: [(x: CGFloat, y: CGFloat)] = [(33, -9), (29, 53), (39, 24)]
-    /// Trolls render as a pair centered in the normal enemy area.
-    static let trollPositions: [(x: CGFloat, y: CGFloat)] = [(19, 3), (38, 51)]
-
-    /// Slimes render as a 2x2 group in the normal enemy area.
-    /// Spaced wide enough to avoid sprite overlap.
-    static let slimePositions: [(x: CGFloat, y: CGFloat)] = [(11, 0), (43, -9), (11, 53), (43, 44)]
-
-    /// Cyclops renders centered in the normal enemy area.
-    static let cyclopsPosition: (x: CGFloat, y: CGFloat) = (33, 24)
-
-    /// Position for orc at index; when orcCount is 3, the middle orc (index 1) is shifted 12pt left.
-    static func orcPosition(index: Int, orcCount: Int) -> (x: CGFloat, y: CGFloat) {
-        let base = orcPositions[index]
-        if orcCount == 3, index == 1 {
-            return (base.x - 12, base.y)
-        }
-        return (base.x, base.y)
-    }
 }
 
-/// Per-orc state tracked for the duration of a game.
-struct OrcState {
+/// Per-enemy combat state for the current wave.
+struct EnemyState {
     var hitCount: Int
     var hitsToKill: Int
     var dead: Bool
@@ -2182,12 +2340,10 @@ private struct InventoryStack: Identifiable, Equatable {
     var id: String { displayName }
 }
 
-    /// Idle start frame indices for up to 3 orcs.
 // MARK: - GameOverlaysView (in same file so type is in scope for IDE)
 struct GameOverlaysView: View {
-    private static let orcIdleStartFrames: [Int] = [4, 6, 0]
-    let damagedOrcIndex: Int?
-    let orcDamageStartDate: Date?
+    let damagedEnemyIndex: Int?
+    let enemyDamageStartDate: Date?
     let rogueOffsetX: CGFloat
     let rogueOffsetY: CGFloat
     let heartsRemaining: Int
@@ -2210,10 +2366,10 @@ struct GameOverlaysView: View {
     let isTrollWave: Bool
     let isSlimeWave: Bool
     let isCyclopsWave: Bool
-    let orcCount: Int
-    let orcStates: [OrcState]
+    let enemyCount: Int
+    let enemyStates: [EnemyState]
     let enemyHitFloatStates: [Int: EnemyHitFloatState]
-    let canTapOrcs: Bool
+    let canTapEnemies: Bool
     let isShurikenActive: Bool
     let shurikenStartDate: Date?
     let potionDropEnemyIndex: Int?
@@ -2232,7 +2388,7 @@ struct GameOverlaysView: View {
     let knifeProjectileStartDate: Date?
     /// Touch target size: ~28% of sprite size, at least 44pt per HIG.
     let touchTargetSize: CGFloat
-    let onOrcTap: (Int) -> Void
+    let onEnemyTap: (Int) -> Void
     let onRogueTap: () -> Void
     let onRogueLongPress: () -> Void
     let onNextWaveTap: (_ arrowOffsetX: CGFloat, _ arrowOffsetY: CGFloat) -> Void
@@ -2245,24 +2401,12 @@ struct GameOverlaysView: View {
     @State private var removingManaStep: [Int: Double] = [:]
     @State private var nextWaveArrowAnimationStartDate: Date = .now
 
-    private var isOrcSlotWave: Bool { !isSlimeWave && !isTrollWave && !isCyclopsWave }
-    private var isGoblinWave: Bool { isOrcSlotWave && roomNumber < 10 }
-    private var isBlueSlimeWave: Bool { isSlimeWave && roomNumber >= 10 }
+    private var enemyWaveProfile: EnemyWaveProfile {
+        EnemyWaveProfile.resolve(isSlimeWave: isSlimeWave, isTrollWave: isTrollWave, isCyclopsWave: isCyclopsWave, roomNumber: roomNumber)
+    }
 
     private func slotPosition(for index: Int) -> (x: CGFloat, y: CGFloat) {
-        if isCyclopsWave {
-            return GameConstants.cyclopsPosition
-        }
-        if isSlimeWave {
-            let safeIndex: Int = max(0, min(index, GameConstants.slimePositions.count - 1))
-            return GameConstants.slimePositions[safeIndex]
-        }
-        if isTrollWave {
-            let safeIndex: Int = max(0, min(index, GameConstants.trollPositions.count - 1))
-            return GameConstants.trollPositions[safeIndex]
-        }
-        let safeIndex: Int = max(0, min(index, GameConstants.orcPositions.count - 1))
-        return GameConstants.orcPosition(index: safeIndex, orcCount: orcCount)
+        enemyWaveProfile.position(index: index, enemyCount: enemyCount)
     }
 
     var body: some View {
@@ -2282,69 +2426,21 @@ struct GameOverlaysView: View {
             // Above Room, below sprites.
             .zIndex(0.5)
 
-            // Torches (below orcs/rogue, above Room)
+            // Torches (below enemies / rogue, above Room)
             TorchView(offsetX: -42, offsetY: -33)
             TorchView(offsetX: 45, offsetY: -33)
 
             ForEach([0, 1, 2, 3], id: \.self) { (index: Int) in
-                let pos: (x: CGFloat, y: CGFloat) = {
-                    if isCyclopsWave {
-                        return GameConstants.cyclopsPosition
-                    }
-                    if isSlimeWave {
-                        let safeIndex: Int = max(0, min(index, GameConstants.slimePositions.count - 1))
-                        return GameConstants.slimePositions[safeIndex]
-                    }
-                    if isTrollWave {
-                        let safeIndex: Int = max(0, min(index, GameConstants.trollPositions.count - 1))
-                        return GameConstants.trollPositions[safeIndex]
-                    }
-                    let safeIndex: Int = max(0, min(index, GameConstants.orcPositions.count - 1))
-                    return GameConstants.orcPosition(index: safeIndex, orcCount: orcCount)
-                }()
-                let fallbackHitsToKill: Int = {
-                    if isCyclopsWave { return 8 }
-                    if isSlimeWave { return roomNumber >= 10 ? GameConstants.blueSlimeHitsToKill : GameConstants.slimeHitsToKill }
-                    if isTrollWave { return 5 }
-                    return roomNumber >= 10 ? GameConstants.orcHitsToKill : GameConstants.goblinHitsToKill
-                }()
-                let state = index < orcStates.count ? orcStates[index] : OrcState(hitCount: 0, hitsToKill: fallbackHitsToKill, dead: true, dying: false, deathStartDate: nil, rogueAttacksUntilEnemyTurn: 0)
-                let enemyDeathName: String = {
-                    if isCyclopsWave { return "CyclopsDead" }
-                    if isSlimeWave { return isBlueSlimeWave ? "BlueSlimeDie" : "SlimeDead" }
-                    if isTrollWave { return "TrollDie" }
-                    return isGoblinWave ? "GoblinDie" : "OrcDie"
-                }()
-                let enemyDeathFrameCount: Int = {
-                    if isCyclopsWave { return GameConstants.cyclopsDieFrameCount }
-                    if isSlimeWave { return GameConstants.slimeDieFrameCount }
-                    if isTrollWave { return GameConstants.trollDieFrameCount }
-                    return isGoblinWave ? GameConstants.goblinDieFrameCount : GameConstants.orcDieFrameCount
-                }()
-                let enemyAttackName: String = {
-                    if isCyclopsWave { return "CyclopsAttack" }
-                    if isSlimeWave { return isBlueSlimeWave ? "BlueSlimeAttack" : "SlimeAttack" }
-                    if isTrollWave { return "TrollAttack" }
-                    return isGoblinWave ? "GoblinAttack" : "OrcAttack"
-                }()
-                let enemyIdleName: String = {
-                    if isCyclopsWave { return "CyclopsIdle" }
-                    if isSlimeWave { return isBlueSlimeWave ? "BlueSlimeIdle" : "SlimeIdle" }
-                    if isTrollWave { return "TrollIdle" }
-                    return isGoblinWave ? "GoblinIdle" : "OrcIdle"
-                }()
-                let enemyDamageName: String = {
-                    if isCyclopsWave { return "CyclopsDamage" }
-                    if isSlimeWave { return isBlueSlimeWave ? "BlueSlimeDamage" : "SlimeDamage" }
-                    if isTrollWave { return "TrollDamage" }
-                    return isGoblinWave ? "GoblinDamage" : "OrcDamage"
-                }()
+                let pos = enemyWaveProfile.position(index: index, enemyCount: enemyCount)
+                let fallbackHitsToKill = enemyWaveProfile.hitsToKill
+                let enemySprites = enemyWaveProfile.spriteNames
+                let state = index < enemyStates.count ? enemyStates[index] : EnemyState(hitCount: 0, hitsToKill: fallbackHitsToKill, dead: true, dying: false, deathStartDate: nil, rogueAttacksUntilEnemyTurn: 0)
                 if !state.dead {
                     ZStack {
                         if state.dying {
                             EnemyDeathView(
-                                name: enemyDeathName,
-                                frameCount: enemyDeathFrameCount,
+                                name: enemySprites.death,
+                                frameCount: enemyWaveProfile.deathStripFrameCount,
                                 deathStartDate: state.deathStartDate,
                                 offsetX: pos.x,
                                 offsetY: pos.y,
@@ -2354,17 +2450,17 @@ struct GameOverlaysView: View {
                             EnemySpriteView(
                                 isAttacking: activeEnemyAttackingIndex == index,
                                 enemyAttackStartDate: activeEnemyAttackStartDate,
-                                attackName: enemyAttackName,
+                                attackName: enemySprites.attack,
                                 rogueOffsetX: rogueOffsetX,
                                 rogueOffsetY: rogueOffsetY,
-                                attackOffsetXAdjustment: isCyclopsWave ? 6 : 0,
-                                isDamaged: damagedOrcIndex == index || (isShurikenActive && orcDamageStartDate != nil),
-                                orcDamageStartDate: orcDamageStartDate,
+                                attackOffsetXAdjustment: enemyWaveProfile.attackOffsetXAdjustment,
+                                isDamaged: damagedEnemyIndex == index || (isShurikenActive && enemyDamageStartDate != nil),
+                                enemyDamageStartDate: enemyDamageStartDate,
                                 offsetX: pos.x,
                                 offsetY: pos.y,
-                                idleStartFrame: (isTrollWave || isSlimeWave || isCyclopsWave) ? nil : (index < Self.orcIdleStartFrames.count ? Self.orcIdleStartFrames[index] : 0),
-                                idleName: enemyIdleName,
-                                damageName: enemyDamageName
+                                idleStartFrame: enemyWaveProfile.usesPrimarySlotIdleStartFrames ? (index < EnemiesConstants.primarySlotEnemyIdleStartFrames.count ? EnemiesConstants.primarySlotEnemyIdleStartFrames[index] : 0) : nil,
+                                idleName: enemySprites.idle,
+                                damageName: enemySprites.damage
                             )
                         }
                         
@@ -2467,30 +2563,11 @@ struct GameOverlaysView: View {
                 let cy = geo.size.height / 2
                 ZStack {
                     ForEach([0, 1, 2, 3], id: \.self) { (index: Int) in
-                        let pos: (x: CGFloat, y: CGFloat) = {
-                            if isCyclopsWave {
-                                return GameConstants.cyclopsPosition
-                            }
-                            if isSlimeWave {
-                                let safeIndex: Int = max(0, min(index, GameConstants.slimePositions.count - 1))
-                                return GameConstants.slimePositions[safeIndex]
-                            }
-                            if isTrollWave {
-                                let safeIndex: Int = max(0, min(index, GameConstants.trollPositions.count - 1))
-                                return GameConstants.trollPositions[safeIndex]
-                            }
-                            let safeIndex: Int = max(0, min(index, GameConstants.orcPositions.count - 1))
-                            return GameConstants.orcPosition(index: safeIndex, orcCount: orcCount)
-                        }()
-                        let fallbackHitsToKill: Int = {
-                            if isCyclopsWave { return 8 }
-                            if isSlimeWave { return roomNumber >= 10 ? GameConstants.blueSlimeHitsToKill : GameConstants.slimeHitsToKill }
-                            if isTrollWave { return 5 }
-                            return roomNumber >= 10 ? GameConstants.orcHitsToKill : GameConstants.goblinHitsToKill
-                        }()
-                        let state = index < orcStates.count ? orcStates[index] : OrcState(hitCount: fallbackHitsToKill, hitsToKill: fallbackHitsToKill, dead: true, dying: false, deathStartDate: nil, rogueAttacksUntilEnemyTurn: 0)
+                        let pos = enemyWaveProfile.position(index: index, enemyCount: enemyCount)
+                        let fallbackHitsToKill = enemyWaveProfile.hitsToKill
+                        let state = index < enemyStates.count ? enemyStates[index] : EnemyState(hitCount: fallbackHitsToKill, hitsToKill: fallbackHitsToKill, dead: true, dying: false, deathStartDate: nil, rogueAttacksUntilEnemyTurn: 0)
                         if !state.dead, !state.dying {
-                            Button(action: { onOrcTap(index) }) {
+                            Button(action: { onEnemyTap(index) }) {
                                 Color.white.opacity(0.01)
                             }
                             .buttonStyle(.plain)
@@ -2501,14 +2578,9 @@ struct GameOverlaysView: View {
                                 if isInventoryEnemyTargetSelectionActive {
                                     return isAttackInputLocked || isRogueWalking || state.hitCount >= state.hitsToKill || isBombThrowActive || isKnifeThrowActive
                                 }
-                                return isAttackInputLocked || isRogueWalking || state.hitCount >= state.hitsToKill || !canTapOrcs
+                                return isAttackInputLocked || isRogueWalking || state.hitCount >= state.hitsToKill || !canTapEnemies
                             }())
-                            .accessibilityLabel({
-                                if isCyclopsWave { return "Cyclops" }
-                                if isSlimeWave { return (isBlueSlimeWave ? "Blue slime" : "Slime") + " \(index + 1)" }
-                                if isTrollWave { return "Troll \(index + 1)" }
-                                return (isGoblinWave ? "Goblin" : "Orc") + " \(index + 1)"
-                            }())
+                            .accessibilityLabel(enemyWaveProfile.accessibilityLabel(enemyIndex: index))
                             .accessibilityHint("Tap to attack")
                         }
                     }
@@ -2528,10 +2600,10 @@ struct GameOverlaysView: View {
             }
             .allowsHitTesting(true)
 
-            // Next-wave arrow button when all orcs are dead and not dying.
-            if orcCount > 0,
-               orcStates.count == orcCount,
-               orcStates.allSatisfy({ $0.dead && !$0.dying }),
+            // Next-wave arrow button when all enemies are dead and not dying.
+            if enemyCount > 0,
+               enemyStates.count == enemyCount,
+               enemyStates.allSatisfy({ $0.dead && !$0.dying }),
                !isRogueWalking {
                 GeometryReader { geo in
                     let cx = geo.size.width / 2
@@ -2850,21 +2922,21 @@ private struct EnemyDeathView: View {
     let potionDropImageName: String?
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: GameConstants.deathFrameDuration)) { context in
+        TimelineView(.animation(minimumInterval: EnemiesConstants.deathStripFrameDuration)) { context in
             ZStack {
                 SpriteSheetView(
                     name: name,
                     frameCount: frameCount,
                     date: context.date,
                     animationStartDate: deathStartDate,
-                    frameDuration: GameConstants.deathFrameDuration,
+                    frameDuration: EnemiesConstants.deathStripFrameDuration,
                     loopAnimation: false
                 )
 
                 if let imageName = potionDropImageName, let start = deathStartDate {
                     let t = context.date.timeIntervalSince(start)
-                    let startAt = 2.0 * GameConstants.deathFrameDuration
-                    let translateDuration = 3.0 * GameConstants.deathFrameDuration
+                    let startAt = 2.0 * EnemiesConstants.deathStripFrameDuration
+                    let translateDuration = 3.0 * EnemiesConstants.deathStripFrameDuration
                     let holdDuration: Double = 1.0
                     let endAt = startAt + translateDuration + holdDuration
 
@@ -2973,7 +3045,7 @@ private struct EnemySpriteView: View {
     /// Applied only during attack translation (positive moves enemy right).
     let attackOffsetXAdjustment: CGFloat
     let isDamaged: Bool
-    let orcDamageStartDate: Date?
+    let enemyDamageStartDate: Date?
     let offsetX: CGFloat
     let offsetY: CGFloat
     let idleStartFrame: Int?
@@ -2981,7 +3053,7 @@ private struct EnemySpriteView: View {
     let damageName: String
 
     private static let damageKnockbackPx: CGFloat = 3
-    private static let orcDamageDuration: Double = Double(GameConstants.attackFrameCount) * GameConstants.attackFrameDuration
+    private static let enemyDamageDuration: Double = Double(GameConstants.attackFrameCount) * GameConstants.attackFrameDuration
 
     var body: some View {
         let effectiveIsDamaged = isDamaged && !isAttacking
@@ -2995,14 +3067,14 @@ private struct EnemySpriteView: View {
         let attackOrDamageInterval: Double = isAttacking ? GameConstants.enemyAttackFrameDuration : GameConstants.attackFrameDuration
         TimelineView(.animation(minimumInterval: (isAttacking || effectiveIsDamaged) ? attackOrDamageInterval : GameConstants.spriteFrameDuration)) { context in
             let damageOffsetX: CGFloat = {
-                guard effectiveIsDamaged, let start = orcDamageStartDate else { return 0 }
+                guard effectiveIsDamaged, let start = enemyDamageStartDate else { return 0 }
                 let t = context.date.timeIntervalSince(start)
-                let half = Self.orcDamageDuration / 2
-                if t <= 0 || t >= Self.orcDamageDuration { return 0 }
+                let half = Self.enemyDamageDuration / 2
+                if t <= 0 || t >= Self.enemyDamageDuration { return 0 }
                 if t < half {
                     return Self.damageKnockbackPx * CGFloat(t / half)
                 }
-                return Self.damageKnockbackPx * CGFloat((Self.orcDamageDuration - t) / half)
+                return Self.damageKnockbackPx * CGFloat((Self.enemyDamageDuration - t) / half)
             }()
 
             let spriteName: String = isAttacking
@@ -3011,7 +3083,7 @@ private struct EnemySpriteView: View {
             let frameCount: Int = isAttacking
                 ? GameConstants.attackFrameCount
                 : (effectiveIsDamaged ? GameConstants.attackFrameCount : GameConstants.spriteFrameCount)
-            let animationStart: Date? = isAttacking ? enemyAttackStartDate : (effectiveIsDamaged ? orcDamageStartDate : nil)
+            let animationStart: Date? = isAttacking ? enemyAttackStartDate : (effectiveIsDamaged ? enemyDamageStartDate : nil)
             let startFrame: Int? = (isAttacking || effectiveIsDamaged) ? nil : idleStartFrame
             let frameDuration: Double = isAttacking
                 ? GameConstants.enemyAttackFrameDuration
