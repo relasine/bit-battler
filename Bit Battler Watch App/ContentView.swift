@@ -7,10 +7,17 @@
 
 import SwiftUI
 import Foundation
+import os
 #if os(watchOS)
 import WatchKit
 import UIKit
+#endif
 
+private enum BitBattlerLog {
+    static let game = Logger(subsystem: Bundle.main.bundleIdentifier ?? "BitBattler", category: "Game")
+}
+
+#if os(watchOS)
 /// Decodes gameplay bitmaps off the main thread before `Start` — first launch otherwise stalls on the asset catalog + rendering setup.
 enum GameplayAssetPrewarm {
     private static let assetNames: [String] = [
@@ -27,7 +34,8 @@ enum GameplayAssetPrewarm {
         "SmallHealthPotion", "SmallManaPotion",
     ]
 
-    private static let lock = NSLock()
+    /// Serial queue for shared prewarm state. (Swift 6: `DispatchQueue.sync` is unavailable inside GCD `async` closures.)
+    private static let stateQueue = DispatchQueue(label: "com.bitbattler.gameplay.prewarm.state")
     private static var hasScheduledBackgroundWork = false
     private static var didFinishLoading = false
     private static var loadedCount = 0
@@ -55,16 +63,23 @@ enum GameplayAssetPrewarm {
     }
 
     private static func runPrewarmOnBackgroundQueue() {
-        DispatchQueue.global(qos: .utility).async {
+        // Swift 6: `DispatchQueue.sync` uses locks and is unavailable from `Thread` blocks too (treated as async).
+        // Use only `stateQueue.async` on this serial queue: FIFO guarantees the completion block runs after all increments.
+        let thread = Thread {
             for (index, name) in assetNames.enumerated() {
                 autoreleasepool {
                     if let image = UIImage(named: name) {
                         forceDecode(image)
+                    } else {
+                        BitBattlerLog.game.warning("GameplayAssetPrewarm: missing UIImage named \"\(name, privacy: .public)\"")
+                        #if DEBUG
+                        assertionFailure("Missing gameplay asset: \(name)")
+                        #endif
                     }
                 }
-                lock.lock()
-                loadedCount += 1
-                lock.unlock()
+                stateQueue.async {
+                    loadedCount += 1
+                }
 
                 // Yield briefly so watchOS can keep the title/loading UI responsive.
                 if index.isMultiple(of: 3) {
@@ -72,53 +87,52 @@ enum GameplayAssetPrewarm {
                 }
             }
 
-            let toCall: [() -> Void]
-            lock.lock()
-            didFinishLoading = true
-            toCall = completions
-            completions.removeAll()
-            lock.unlock()
-
-            DispatchQueue.main.async {
-                for f in toCall {
-                    f()
+            stateQueue.async {
+                didFinishLoading = true
+                let toCall = completions
+                completions.removeAll()
+                DispatchQueue.main.async {
+                    for f in toCall {
+                        f()
+                    }
                 }
             }
         }
+        thread.name = "GameplayAssetPrewarm"
+        thread.qualityOfService = .utility
+        thread.start()
     }
 
     static var progress: Double {
-        lock.lock()
-        let loaded = loadedCount
-        lock.unlock()
-        let total = assetNames.count
-        guard total > 0 else { return 1 }
-        return min(1, Double(loaded) / Double(total))
+        stateQueue.sync {
+            let loaded = loadedCount
+            let total = assetNames.count
+            guard total > 0 else { return 1.0 }
+            return min(1, Double(loaded) / Double(total))
+        }
     }
 
     static var isComplete: Bool {
-        lock.lock()
-        let done = didFinishLoading
-        lock.unlock()
-        return done
+        stateQueue.sync { didFinishLoading }
     }
 
     static var progressLabel: String {
-        lock.lock()
-        let loaded = loadedCount
-        lock.unlock()
-        return "\(min(loaded, assetNames.count))/\(assetNames.count)"
+        stateQueue.sync {
+            let loaded = loadedCount
+            return "\(min(loaded, assetNames.count))/\(assetNames.count)"
+        }
     }
 
     /// Fire-and-forget prewarm once loading UI is visible.
     static func ensureStarted() {
-        lock.lock()
-        let shouldSchedule = !hasScheduledBackgroundWork
-        if shouldSchedule {
-            hasScheduledBackgroundWork = true
-            loadedCount = 0
+        let shouldSchedule = stateQueue.sync { () -> Bool in
+            let shouldSchedule = !hasScheduledBackgroundWork
+            if shouldSchedule {
+                hasScheduledBackgroundWork = true
+                loadedCount = 0
+            }
+            return shouldSchedule
         }
-        lock.unlock()
 
         guard shouldSchedule else { return }
         runPrewarmOnBackgroundQueue()
@@ -126,20 +140,24 @@ enum GameplayAssetPrewarm {
 
     /// Runs on the main queue after the UIImage pass completes (immediately if it already finished).
     static func whenComplete(execute body: @escaping () -> Void) {
-        lock.lock()
-        if didFinishLoading {
-            lock.unlock()
+        let (runImmediatelyOnMain, shouldSchedulePrewarm) = stateQueue.sync { () -> (Bool, Bool) in
+            if didFinishLoading {
+                return (true, false)
+            }
+            completions.append(body)
+            let shouldSchedule = !hasScheduledBackgroundWork
+            if shouldSchedule {
+                hasScheduledBackgroundWork = true
+            }
+            return (false, shouldSchedule)
+        }
+
+        if runImmediatelyOnMain {
             DispatchQueue.main.async(execute: body)
             return
         }
-        completions.append(body)
-        let shouldSchedule = !hasScheduledBackgroundWork
-        if shouldSchedule {
-            hasScheduledBackgroundWork = true
-        }
-        lock.unlock()
 
-        guard shouldSchedule else { return }
+        guard shouldSchedulePrewarm else { return }
         runPrewarmOnBackgroundQueue()
     }
 }
@@ -663,7 +681,7 @@ struct ContentView: View {
         // - Cyclops: 1 enemy, 8 hits, death animation spans 14 frames
         // - Primary enemy slot (roll 0): 3 goblins (rooms 1–9) or 3 Orc enemies (room 10+, 4 hits each)
         // - Trolls: existing wave logic
-        let roll = Int.random(in: 0..<4)
+        let roll = Int.random(in: 0..<EnemyWaveRoll.allCases.count)
         isSlimeWave = roll == 2
         isCyclopsWave = roll == 3
 
@@ -711,7 +729,9 @@ struct ContentView: View {
         enemyWaveProfile.enemyHitChance
     }
 
-    private func maybeStartPendingEnemyAttack(forSession sessionId: UUID) {
+    private static let maxPendingEnemyDamagePollRetries = 20
+
+    private func maybeStartPendingEnemyAttack(forSession sessionId: UUID, retryCount: Int = 0) {
         guard gameSessionId == sessionId else { return }
         guard pendingEnemyAttackPhases > 0 else { return }
         guard !isEnemyAttackSequenceInProgress else { return }
@@ -727,11 +747,20 @@ struct ContentView: View {
                 let elapsed = Date().timeIntervalSince(start)
                 let remaining = max(0, enemyDamageDuration - elapsed)
                 DispatchQueue.main.asyncAfter(deadline: .now() + remaining + 0.02) {
-                    maybeStartPendingEnemyAttack(forSession: sessionId)
+                    maybeStartPendingEnemyAttack(forSession: sessionId, retryCount: 0)
                 }
             } else {
+                if retryCount >= Self.maxPendingEnemyDamagePollRetries {
+                    BitBattlerLog.game.fault("maybeStartPendingEnemyAttack: clearing stuck damage overlay state after \(Self.maxPendingEnemyDamagePollRetries) retries")
+                    withTransaction(Transaction(animation: nil)) {
+                        damagedEnemyIndex = nil
+                        enemyDamageStartDate = nil
+                    }
+                    maybeStartPendingEnemyAttack(forSession: sessionId, retryCount: 0)
+                    return
+                }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    maybeStartPendingEnemyAttack(forSession: sessionId)
+                    maybeStartPendingEnemyAttack(forSession: sessionId, retryCount: retryCount + 1)
                 }
             }
             return
@@ -806,7 +835,6 @@ struct ContentView: View {
         }
 
         let didHit = Double.random(in: 0..<1) < currentEnemyHitChance
-        let isRogueDyingAfterHit = didHit && (heartsRemaining - 1 <= 0)
 
         // Start enemy visuals/translation with a brief pre-delay.
         DispatchQueue.main.asyncAfter(deadline: .now() + GameConstants.enemyAttackPreDelay) {
@@ -856,7 +884,7 @@ struct ContentView: View {
                         activeEnemyAttackStartDate = nil
                         rogueDamageStartDate = nil
                         rogueDodgeStartDate = nil
-                        if !isRogueDyingAfterHit {
+                        if heartsRemaining > 0 {
                             rogueOffsetX = GameConstants.rogueIdleOffsetX
                         }
                         if enemyIndex < enemyStates.count, !enemyStates[enemyIndex].dead {
@@ -864,7 +892,7 @@ struct ContentView: View {
                         }
                     }
 
-                    if isRogueDyingAfterHit {
+                    if heartsRemaining <= 0 {
                         stopEnemyAttackSequence()
                         startRogueDie(forSession: sessionId)
                     } else {
@@ -915,6 +943,7 @@ struct ContentView: View {
     }
 
     private func resetGameToInitialState() {
+        BitBattlerLog.game.info("resetGameToInitialState: new session")
         gameSessionId = UUID()
         roomNumber = GameConstants.startingRoomNumber
         totalHitsUsed = 0
@@ -1076,7 +1105,7 @@ struct ContentView: View {
         withTransaction(Transaction(animation: nil)) {
             inventoryEnemyTargetItem = nil
             inventoryCrownDetent = 0
-            manaRemaining -= 1
+            manaRemaining = max(0, manaRemaining - 1)
         }
 
         applyRogueAttackActionAdvancingEnemyTurns()
@@ -1136,6 +1165,7 @@ struct ContentView: View {
 
             DispatchQueue.main.asyncAfter(deadline: .now() + enemyDamageDuration) {
                 guard gameSessionId == sessionId else { return }
+                guard index < enemyStates.count else { return }
                 withTransaction(Transaction(animation: nil)) {
                     damagedEnemyIndex = nil
                     enemyDamageStartDate = nil
@@ -1162,6 +1192,7 @@ struct ContentView: View {
 
                     DispatchQueue.main.asyncAfter(deadline: .now() + enemyDeathAnimationDuration) {
                         guard gameSessionId == sessionId else { return }
+                        guard index < enemyStates.count else { return }
                         withTransaction(Transaction(animation: nil)) {
                             enemyStates[index].dead = true
                             enemyStates[index].dying = false
@@ -1255,6 +1286,7 @@ struct ContentView: View {
 
             DispatchQueue.main.asyncAfter(deadline: .now() + enemyDamageDuration) {
                 guard gameSessionId == sessionId else { return }
+                guard index < enemyStates.count else { return }
                 withTransaction(Transaction(animation: nil)) {
                     damagedEnemyIndex = nil
                     enemyDamageStartDate = nil
@@ -1281,6 +1313,7 @@ struct ContentView: View {
 
                     DispatchQueue.main.asyncAfter(deadline: .now() + enemyDeathAnimationDuration) {
                         guard gameSessionId == sessionId else { return }
+                        guard index < enemyStates.count else { return }
                         withTransaction(Transaction(animation: nil)) {
                             enemyStates[index].dead = true
                             enemyStates[index].dying = false
@@ -1323,7 +1356,7 @@ struct ContentView: View {
         let shurikenStart = Date()
         applyRogueAttackActionAdvancingEnemyTurns()
         withTransaction(Transaction(animation: nil)) {
-            manaRemaining -= 1
+            manaRemaining = max(0, manaRemaining - 1)
             showSkillSheet = false
             isShurikenActive = true
             shurikenStartDate = shurikenStart
@@ -1448,6 +1481,8 @@ struct ContentView: View {
             isAttackInputLocked = true
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + enemyDamageDelay) {
+            guard gameSessionId == sessionId else { return }
+            guard index < enemyStates.count else { return }
             withTransaction(Transaction(animation: nil)) {
                 damagedEnemyIndex = index
                 enemyDamageStartDate = Date()
@@ -1458,7 +1493,9 @@ struct ContentView: View {
                 triggerEnemyHitFloat(forEnemyIndex: index, damageAmount: dmg, showCritBang: didCrit, startDate: Date(), forSession: sessionId)
             }
         }
-            DispatchQueue.main.asyncAfter(deadline: .now() + enemyDamageDelay + enemyDamageDuration) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + enemyDamageDelay + enemyDamageDuration) {
+            guard gameSessionId == sessionId else { return }
+            guard index < enemyStates.count else { return }
             withTransaction(Transaction(animation: nil)) {
                 damagedEnemyIndex = nil
                 enemyDamageStartDate = nil
@@ -1485,6 +1522,8 @@ struct ContentView: View {
                 }
 
                 DispatchQueue.main.asyncAfter(deadline: .now() + enemyDeathAnimationDuration) {
+                    guard gameSessionId == sessionId else { return }
+                    guard index < enemyStates.count else { return }
                     withTransaction(Transaction(animation: nil)) {
                         enemyStates[index].dead = true
                         enemyStates[index].dying = false
@@ -1502,6 +1541,7 @@ struct ContentView: View {
             }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + enemyDamageDelay + enemyDamageDuration + postDamageTapCooldownDuration) {
+            guard gameSessionId == sessionId else { return }
             withTransaction(Transaction(animation: nil)) {
                 isAttackInputLocked = false
             }
@@ -2340,6 +2380,480 @@ private struct InventoryStack: Identifiable, Equatable {
     var id: String { displayName }
 }
 
+// MARK: - GameOverlaysView subtrees (smaller bodies = cheaper SwiftUI diffing on watchOS)
+
+private struct GameOverlaysRoomTorchesLayer: View {
+    let roomNumber: Int
+
+    var body: some View {
+        ZStack {
+            Image("Room")
+                .interpolation(.none)
+
+            VStack(spacing: 0) {
+                Spacer()
+                Text("Room \(roomNumber)")
+                    .font(.caption2)
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.85), radius: 1, x: 0, y: 1)
+                    .padding(.bottom, 30)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .zIndex(0.5)
+
+            TorchView(offsetX: -42, offsetY: -33)
+            TorchView(offsetX: 45, offsetY: -33)
+        }
+    }
+}
+
+private struct GameOverlaysHeartsHUD: View {
+    let heartsRemaining: Int
+    @State private var removingHeartSlots: Set<Int> = []
+    @State private var removingHeartStep: [Int: Double] = [:]
+
+    var body: some View {
+        VStack {
+            HStack(spacing: 2) {
+                ForEach(0..<GameConstants.heartsInitial, id: \.self) { idx in
+                    let progress = removingHeartStep[idx] ?? 0
+                    Image("Heart")
+                        .resizable()
+                        .frame(width: 14, height: 14)
+                        .opacity({
+                            if idx < heartsRemaining { return 1 }
+                            if removingHeartSlots.contains(idx) {
+                                return max(0, min(1, 1 - progress))
+                            }
+                            return 0
+                        }())
+                        .offset(y: {
+                            guard removingHeartSlots.contains(idx) else { return 0 }
+                            return -CGFloat(progress) * 15
+                        }())
+                }
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, 4)
+            .padding(.top, 4)
+            .offset(x: 37, y: 31)
+            .onChange(of: heartsRemaining) { oldValue, newValue in
+                guard newValue < oldValue else {
+                    removingHeartSlots.removeAll()
+                    removingHeartStep.removeAll()
+                    return
+                }
+                let removedSlots = (newValue..<oldValue).reversed()
+                for removedIdx in removedSlots where removedIdx >= 0 && removedIdx < GameConstants.heartsInitial {
+                    removingHeartSlots.insert(removedIdx)
+                    removingHeartStep[removedIdx] = 0
+                    withAnimation(.linear(duration: 0.5)) {
+                        removingHeartStep[removedIdx] = 1
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        removingHeartSlots.remove(removedIdx)
+                        removingHeartStep.removeValue(forKey: removedIdx)
+                    }
+                }
+            }
+
+            Spacer()
+        }
+    }
+}
+
+private struct GameOverlaysManaHUD: View {
+    let manaRemaining: Int
+    @State private var removingManaSlots: Set<Int> = []
+    @State private var removingManaStep: [Int: Double] = [:]
+
+    var body: some View {
+        VStack {
+            HStack(spacing: 2) {
+                Spacer()
+                ForEach((0..<GameConstants.manaInitial).reversed(), id: \.self) { idx in
+                    let progress = removingManaStep[idx] ?? 0
+                    Image("Mana")
+                        .resizable()
+                        .interpolation(.none)
+                        .frame(width: 14, height: 14)
+                        .opacity({
+                            if idx < manaRemaining { return 1 }
+                            if removingManaSlots.contains(idx) {
+                                return max(0, min(1, 1 - progress))
+                            }
+                            return 0
+                        }())
+                        .offset(y: {
+                            guard removingManaSlots.contains(idx) else { return 0 }
+                            return -CGFloat(progress) * 15
+                        }())
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.trailing, 4)
+            .padding(.top, 4)
+            .offset(x: -37, y: 31)
+            .onChange(of: manaRemaining) { oldValue, newValue in
+                guard newValue < oldValue else {
+                    removingManaSlots.removeAll()
+                    removingManaStep.removeAll()
+                    return
+                }
+                let removedSlots = (newValue..<oldValue).reversed()
+                for removedIdx in removedSlots where removedIdx >= 0 && removedIdx < GameConstants.manaInitial {
+                    removingManaSlots.insert(removedIdx)
+                    removingManaStep[removedIdx] = 0
+                    withAnimation(.linear(duration: 0.5)) {
+                        removingManaStep[removedIdx] = 1
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        removingManaSlots.remove(removedIdx)
+                        removingManaStep.removeValue(forKey: removedIdx)
+                    }
+                }
+            }
+
+            Spacer()
+        }
+    }
+}
+
+private struct GameOverlaysEnemySpritesGrid: View {
+    let enemyWaveProfile: EnemyWaveProfile
+    let enemyCount: Int
+    let enemyStates: [EnemyState]
+    let enemyHitFloatStates: [Int: EnemyHitFloatState]
+    let damagedEnemyIndex: Int?
+    let enemyDamageStartDate: Date?
+    let isShurikenActive: Bool
+    let activeEnemyAttackingIndex: Int?
+    let activeEnemyAttackStartDate: Date?
+    let rogueOffsetX: CGFloat
+    let rogueOffsetY: CGFloat
+    let potionDropEnemyIndex: Int?
+    let potionDropImageName: String?
+
+    var body: some View {
+        ForEach([0, 1, 2, 3], id: \.self) { (index: Int) in
+            let pos = enemyWaveProfile.position(index: index, enemyCount: enemyCount)
+            let fallbackHitsToKill = enemyWaveProfile.hitsToKill
+            let enemySprites = enemyWaveProfile.spriteNames
+            let state = index < enemyStates.count ? enemyStates[index] : EnemyState(hitCount: 0, hitsToKill: fallbackHitsToKill, dead: true, dying: false, deathStartDate: nil, rogueAttacksUntilEnemyTurn: 0)
+            if !state.dead {
+                ZStack {
+                    if state.dying {
+                        EnemyDeathView(
+                            name: enemySprites.death,
+                            frameCount: enemyWaveProfile.deathStripFrameCount,
+                            deathStartDate: state.deathStartDate,
+                            offsetX: pos.x,
+                            offsetY: pos.y,
+                            potionDropImageName: potionDropEnemyIndex == index ? potionDropImageName : nil
+                        )
+                    } else {
+                        EnemySpriteView(
+                            isAttacking: activeEnemyAttackingIndex == index,
+                            enemyAttackStartDate: activeEnemyAttackStartDate,
+                            attackName: enemySprites.attack,
+                            rogueOffsetX: rogueOffsetX,
+                            rogueOffsetY: rogueOffsetY,
+                            attackOffsetXAdjustment: enemyWaveProfile.attackOffsetXAdjustment,
+                            isDamaged: damagedEnemyIndex == index || (isShurikenActive && enemyDamageStartDate != nil),
+                            enemyDamageStartDate: enemyDamageStartDate,
+                            offsetX: pos.x,
+                            offsetY: pos.y,
+                            idleStartFrame: enemyWaveProfile.usesPrimarySlotIdleStartFrames ? (index < EnemiesConstants.primarySlotEnemyIdleStartFrames.count ? EnemiesConstants.primarySlotEnemyIdleStartFrames[index] : 0) : nil,
+                            idleName: enemySprites.idle,
+                            damageName: enemySprites.damage
+                        )
+                    }
+
+                    if let hitFloat = enemyHitFloatStates[index] {
+                        HitFloatTextView(
+                            damageAmount: hitFloat.damageAmount,
+                            showCritBang: hitFloat.showCritBang,
+                            startDate: hitFloat.startDate
+                        )
+                        .offset(x: pos.x + 3, y: pos.y)
+                    }
+                }
+                .zIndex(state.dying ? 2 : (activeEnemyAttackingIndex == index ? 3 : 2))
+            }
+        }
+    }
+}
+
+private struct GameOverlaysRogueAndProjectileLayer: View {
+    let isRogueDead: Bool
+    let isRogueAttacking: Bool
+    let attackStartDate: Date?
+    let isRogueWalking: Bool
+    let walkStartDate: Date?
+    let rogueDamageStartDate: Date?
+    let rogueDieStartDate: Date?
+    let rogueDodgeStartDate: Date?
+    let isBombThrowActive: Bool
+    let bombThrowStartDate: Date?
+    let isKnifeThrowActive: Bool
+    let knifeThrowStartDate: Date?
+    let isShurikenActive: Bool
+    let shurikenStartDate: Date?
+    let rogueOffsetX: CGFloat
+    let rogueOffsetY: CGFloat
+    let healEffectStartDate: Date?
+    let manaRestoreEffectStartDate: Date?
+    let isBombThrowActiveForGround: Bool
+    let bombProjectileStartDate: Date?
+    let bombGroundStartDate: Date?
+    let bombTargetIndex: Int?
+    let isKnifeThrowActiveForProj: Bool
+    let knifeProjectileStartDate: Date?
+    let knifeTargetIndex: Int?
+    let slotPosition: (Int) -> (x: CGFloat, y: CGFloat)
+
+    var body: some View {
+        Group {
+            if !isRogueDead {
+                RogueSpriteOverlay(
+                    isAttacking: isRogueAttacking,
+                    attackStartDate: attackStartDate,
+                    isWalking: isRogueWalking,
+                    walkStartDate: walkStartDate,
+                    rogueDamageStartDate: rogueDamageStartDate,
+                    rogueDieStartDate: rogueDieStartDate,
+                    rogueDodgeStartDate: rogueDodgeStartDate,
+                    isBombThrowActive: isBombThrowActive,
+                    bombThrowStartDate: bombThrowStartDate,
+                    isKnifeThrowActive: isKnifeThrowActive,
+                    knifeThrowStartDate: knifeThrowStartDate,
+                    isShurikenActive: isShurikenActive,
+                    shurikenStartDate: shurikenStartDate,
+                    offsetX: rogueOffsetX,
+                    offsetY: rogueOffsetY
+                )
+                .zIndex((isRogueAttacking || isShurikenActive || isBombThrowActive || isKnifeThrowActive) ? 3 : 1)
+
+                if let healStart = healEffectStartDate {
+                    HealEffectView(
+                        startDate: healStart,
+                        offsetX: rogueOffsetX,
+                        offsetY: rogueOffsetY
+                    )
+                    .zIndex(4)
+                }
+
+                if let manaStart = manaRestoreEffectStartDate {
+                    ManaRestoreEffectView(
+                        startDate: manaStart,
+                        offsetX: rogueOffsetX,
+                        offsetY: rogueOffsetY
+                    )
+                    .zIndex(4)
+                }
+            }
+
+            if isBombThrowActiveForGround, let bProjStart = bombProjectileStartDate, let bTIdx = bombTargetIndex {
+                let destBomb = slotPosition(bTIdx)
+                BombThrownFlightView(
+                    startDate: bProjStart,
+                    duration: GameConstants.bombProjectileDuration,
+                    fromX: rogueOffsetX,
+                    fromY: rogueOffsetY,
+                    toX: destBomb.x,
+                    toY: destBomb.y
+                )
+                .zIndex(8)
+            }
+
+            if isBombThrowActiveForGround, let bGroundStart = bombGroundStartDate, let bTIdx = bombTargetIndex {
+                let gPos = slotPosition(bTIdx)
+                TimelineView(.animation(minimumInterval: GameConstants.bombGroundFrameDuration)) { context in
+                    SpriteSheetView(
+                        name: "BombGround",
+                        frameCount: GameConstants.bombGroundFrameCount,
+                        date: context.date,
+                        animationStartDate: bGroundStart,
+                        frameDuration: GameConstants.bombGroundFrameDuration,
+                        loopAnimation: false
+                    )
+                }
+                .frame(width: GameConstants.spriteFrameSize, height: GameConstants.spriteFrameSize)
+                .offset(x: gPos.x, y: gPos.y)
+                .zIndex(7)
+            }
+
+            if isKnifeThrowActiveForProj, let kProjStart = knifeProjectileStartDate, let kTIdx = knifeTargetIndex {
+                let destKnife = slotPosition(kTIdx)
+                KnifeThrownFlightView(
+                    startDate: kProjStart,
+                    duration: GameConstants.knifeProjectileDuration,
+                    fromX: rogueOffsetX + GameConstants.knifeSpawnOffsetX,
+                    fromY: rogueOffsetY,
+                    toX: destKnife.x,
+                    toY: destKnife.y
+                )
+                .zIndex(8)
+            }
+        }
+    }
+}
+
+private struct GameOverlaysTouchLayer: View {
+    let enemyWaveProfile: EnemyWaveProfile
+    let enemyCount: Int
+    let enemyStates: [EnemyState]
+    let touchTargetSize: CGFloat
+    let rogueOffsetX: CGFloat
+    let rogueOffsetY: CGFloat
+    let isAttackInputLocked: Bool
+    let isRogueWalking: Bool
+    let canTapEnemies: Bool
+    let isInventoryEnemyTargetSelectionActive: Bool
+    let isBombThrowActive: Bool
+    let isKnifeThrowActive: Bool
+    let onEnemyTap: (Int) -> Void
+    let onRogueTap: () -> Void
+    let onRogueLongPress: () -> Void
+
+    var body: some View {
+        GeometryReader { geo in
+            let cx = geo.size.width / 2
+            let cy = geo.size.height / 2
+            ZStack {
+                ForEach([0, 1, 2, 3], id: \.self) { (index: Int) in
+                    let pos = enemyWaveProfile.position(index: index, enemyCount: enemyCount)
+                    let fallbackHitsToKill = enemyWaveProfile.hitsToKill
+                    let state = index < enemyStates.count ? enemyStates[index] : EnemyState(hitCount: fallbackHitsToKill, hitsToKill: fallbackHitsToKill, dead: true, dying: false, deathStartDate: nil, rogueAttacksUntilEnemyTurn: 0)
+                    if !state.dead, !state.dying {
+                        Button(action: { onEnemyTap(index) }) {
+                            Color.white.opacity(0.01)
+                        }
+                        .buttonStyle(.plain)
+                        .frame(width: touchTargetSize, height: touchTargetSize)
+                        .contentShape(Rectangle())
+                        .position(x: cx + pos.x, y: cy + pos.y)
+                        .disabled({
+                            if isInventoryEnemyTargetSelectionActive {
+                                return isAttackInputLocked || isRogueWalking || state.hitCount >= state.hitsToKill || isBombThrowActive || isKnifeThrowActive
+                            }
+                            return isAttackInputLocked || isRogueWalking || state.hitCount >= state.hitsToKill || !canTapEnemies
+                        }())
+                        .accessibilityLabel(enemyWaveProfile.accessibilityLabel(enemyIndex: index))
+                        .accessibilityHint("Tap to attack")
+                    }
+                }
+                Color.white.opacity(0.01)
+                    .frame(width: touchTargetSize, height: touchTargetSize)
+                    .contentShape(Rectangle())
+                    .position(x: cx + rogueOffsetX, y: cy + rogueOffsetY)
+                    .onTapGesture {
+                        onRogueTap()
+                    }
+                    .onLongPressGesture(minimumDuration: 0.5) {
+                        onRogueLongPress()
+                    }
+                    .accessibilityLabel("Rogue")
+                    .accessibilityHint("Tap for skills, long press to reset game")
+            }
+        }
+        .allowsHitTesting(true)
+    }
+}
+
+private struct GameOverlaysNextWaveArrowLayer: View {
+    @Binding var nextWaveArrowAnimationStartDate: Date
+    let enemyCount: Int
+    let enemyStates: [EnemyState]
+    let isRogueWalking: Bool
+    let isRogueAttacking: Bool
+    let isEnemyAttackSequenceInProgress: Bool
+    let isRogueDead: Bool
+    let rogueDamageStartDate: Date?
+    let rogueDieStartDate: Date?
+    let isBombThrowActive: Bool
+    let isKnifeThrowActive: Bool
+    let isInventoryEnemyTargetSelectionActive: Bool
+    let onNextWaveTap: (_ arrowOffsetX: CGFloat, _ arrowOffsetY: CGFloat) -> Void
+
+    var body: some View {
+        Group {
+            if enemyCount > 0,
+               enemyStates.count == enemyCount,
+               enemyStates.allSatisfy({ $0.dead && !$0.dying }),
+               !isRogueWalking {
+                GeometryReader { geo in
+                    let cx = geo.size.width / 2
+                    let cy = geo.size.height / 2
+                    let arrowOffsetX = GameConstants.spriteFrameSize * 0.75 - 21
+                    let arrowOffsetY: CGFloat = 33
+                    TimelineView(.periodic(from: nextWaveArrowAnimationStartDate, by: 0.12)) { context in
+                        let stepInterval: Double = 0.12
+                        let stepsFirstCycleCount: Int = 7
+                        let stepsSubsequentCycleCount: Int = 8
+                        let elapsedSteps: Int = max(0, Int(floor(context.date.timeIntervalSince(nextWaveArrowAnimationStartDate) / stepInterval)))
+
+                        let animatedOffsetX: CGFloat = {
+                            if elapsedSteps < stepsFirstCycleCount {
+                                return -15 + (CGFloat(elapsedSteps) * 3)
+                            }
+                            let subsequentIndex = (elapsedSteps - stepsFirstCycleCount) % stepsSubsequentCycleCount
+                            switch subsequentIndex {
+                            case 0: return -18
+                            case 1: return -15
+                            case 2: return -12
+                            case 3: return -9
+                            case 4: return -6
+                            case 5: return -3
+                            case 6: return 0
+                            default: return 3
+                            }
+                        }()
+
+                        Button(action: { onNextWaveTap(arrowOffsetX, arrowOffsetY) }) {
+                            Image("Arrow")
+                                .interpolation(.none)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isRogueAttacking || isRogueWalking || isEnemyAttackSequenceInProgress || isRogueDead || rogueDamageStartDate != nil || rogueDieStartDate != nil || isBombThrowActive || isKnifeThrowActive || isInventoryEnemyTargetSelectionActive)
+                        .position(
+                            x: cx + arrowOffsetX + animatedOffsetX,
+                            y: cy + arrowOffsetY
+                        )
+                        .accessibilityLabel("Next wave")
+                        .accessibilityHint("Spawn new enemies")
+                    }
+                }
+                .onAppear {
+                    nextWaveArrowAnimationStartDate = .now
+                }
+            }
+        }
+    }
+}
+
+private struct GameOverlaysRoomWipeLayer: View {
+    let isRoomWiping: Bool
+    let roomWipeProgress: CGFloat
+
+    var body: some View {
+        Group {
+            if isRoomWiping {
+                GeometryReader { geo in
+                    Rectangle()
+                        .fill(Color.black)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .offset(x: roomWipeProgress * geo.size.width, y: 0)
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                }
+                .zIndex(1000)
+            }
+        }
+    }
+}
+
 // MARK: - GameOverlaysView (in same file so type is in scope for IDE)
 struct GameOverlaysView: View {
     let damagedEnemyIndex: Int?
@@ -2392,13 +2906,7 @@ struct GameOverlaysView: View {
     let onRogueTap: () -> Void
     let onRogueLongPress: () -> Void
     let onNextWaveTap: (_ arrowOffsetX: CGFloat, _ arrowOffsetY: CGFloat) -> Void
-    
-    @State private var removingHeartSlots: Set<Int> = []
-    /// Heart index -> removal progress (0...1). Smoothly animates upward + fade-out.
-    @State private var removingHeartStep: [Int: Double] = [:]
-    @State private var removingManaSlots: Set<Int> = []
-    /// Mana index -> removal progress (0...1). Smoothly animates upward + fade-out.
-    @State private var removingManaStep: [Int: Double] = [:]
+
     @State private var nextWaveArrowAnimationStartDate: Date = .now
 
     private var enemyWaveProfile: EnemyWaveProfile {
@@ -2411,373 +2919,92 @@ struct GameOverlaysView: View {
 
     var body: some View {
         ZStack {
-            Image("Room")
-                .interpolation(.none)
+            GameOverlaysRoomTorchesLayer(roomNumber: roomNumber)
 
-            VStack(spacing: 0) {
-                Spacer()
-                Text("Room \(roomNumber)")
-                    .font(.caption2)
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.85), radius: 1, x: 0, y: 1)
-                    .padding(.bottom, 30)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Above Room, below sprites.
-            .zIndex(0.5)
+            GameOverlaysEnemySpritesGrid(
+                enemyWaveProfile: enemyWaveProfile,
+                enemyCount: enemyCount,
+                enemyStates: enemyStates,
+                enemyHitFloatStates: enemyHitFloatStates,
+                damagedEnemyIndex: damagedEnemyIndex,
+                enemyDamageStartDate: enemyDamageStartDate,
+                isShurikenActive: isShurikenActive,
+                activeEnemyAttackingIndex: activeEnemyAttackingIndex,
+                activeEnemyAttackStartDate: activeEnemyAttackStartDate,
+                rogueOffsetX: rogueOffsetX,
+                rogueOffsetY: rogueOffsetY,
+                potionDropEnemyIndex: potionDropEnemyIndex,
+                potionDropImageName: potionDropImageName
+            )
 
-            // Torches (below enemies / rogue, above Room)
-            TorchView(offsetX: -42, offsetY: -33)
-            TorchView(offsetX: 45, offsetY: -33)
+            GameOverlaysRogueAndProjectileLayer(
+                isRogueDead: isRogueDead,
+                isRogueAttacking: isRogueAttacking,
+                attackStartDate: attackStartDate,
+                isRogueWalking: isRogueWalking,
+                walkStartDate: walkStartDate,
+                rogueDamageStartDate: rogueDamageStartDate,
+                rogueDieStartDate: rogueDieStartDate,
+                rogueDodgeStartDate: rogueDodgeStartDate,
+                isBombThrowActive: isBombThrowActive,
+                bombThrowStartDate: bombThrowStartDate,
+                isKnifeThrowActive: isKnifeThrowActive,
+                knifeThrowStartDate: knifeThrowStartDate,
+                isShurikenActive: isShurikenActive,
+                shurikenStartDate: shurikenStartDate,
+                rogueOffsetX: rogueOffsetX,
+                rogueOffsetY: rogueOffsetY,
+                healEffectStartDate: healEffectStartDate,
+                manaRestoreEffectStartDate: manaRestoreEffectStartDate,
+                isBombThrowActiveForGround: isBombThrowActive,
+                bombProjectileStartDate: bombProjectileStartDate,
+                bombGroundStartDate: bombGroundStartDate,
+                bombTargetIndex: bombTargetIndex,
+                isKnifeThrowActiveForProj: isKnifeThrowActive,
+                knifeProjectileStartDate: knifeProjectileStartDate,
+                knifeTargetIndex: knifeTargetIndex,
+                slotPosition: slotPosition(for:)
+            )
 
-            ForEach([0, 1, 2, 3], id: \.self) { (index: Int) in
-                let pos = enemyWaveProfile.position(index: index, enemyCount: enemyCount)
-                let fallbackHitsToKill = enemyWaveProfile.hitsToKill
-                let enemySprites = enemyWaveProfile.spriteNames
-                let state = index < enemyStates.count ? enemyStates[index] : EnemyState(hitCount: 0, hitsToKill: fallbackHitsToKill, dead: true, dying: false, deathStartDate: nil, rogueAttacksUntilEnemyTurn: 0)
-                if !state.dead {
-                    ZStack {
-                        if state.dying {
-                            EnemyDeathView(
-                                name: enemySprites.death,
-                                frameCount: enemyWaveProfile.deathStripFrameCount,
-                                deathStartDate: state.deathStartDate,
-                                offsetX: pos.x,
-                                offsetY: pos.y,
-                                potionDropImageName: potionDropEnemyIndex == index ? potionDropImageName : nil
-                            )
-                        } else {
-                            EnemySpriteView(
-                                isAttacking: activeEnemyAttackingIndex == index,
-                                enemyAttackStartDate: activeEnemyAttackStartDate,
-                                attackName: enemySprites.attack,
-                                rogueOffsetX: rogueOffsetX,
-                                rogueOffsetY: rogueOffsetY,
-                                attackOffsetXAdjustment: enemyWaveProfile.attackOffsetXAdjustment,
-                                isDamaged: damagedEnemyIndex == index || (isShurikenActive && enemyDamageStartDate != nil),
-                                enemyDamageStartDate: enemyDamageStartDate,
-                                offsetX: pos.x,
-                                offsetY: pos.y,
-                                idleStartFrame: enemyWaveProfile.usesPrimarySlotIdleStartFrames ? (index < EnemiesConstants.primarySlotEnemyIdleStartFrames.count ? EnemiesConstants.primarySlotEnemyIdleStartFrames[index] : 0) : nil,
-                                idleName: enemySprites.idle,
-                                damageName: enemySprites.damage
-                            )
-                        }
-                        
-                        if let hitFloat = enemyHitFloatStates[index] {
-                            HitFloatTextView(
-                                damageAmount: hitFloat.damageAmount,
-                                showCritBang: hitFloat.showCritBang,
-                                startDate: hitFloat.startDate
-                            )
-                            .offset(x: pos.x + 3, y: pos.y)
-                        }
-                    }
-                    .zIndex(state.dying ? 2 : (activeEnemyAttackingIndex == index ? 3 : 2))
-                }
-            }
-            if !isRogueDead {
-                RogueSpriteOverlay(
-                    isAttacking: isRogueAttacking,
-                    attackStartDate: attackStartDate,
-                    isWalking: isRogueWalking,
-                    walkStartDate: walkStartDate,
-                    rogueDamageStartDate: rogueDamageStartDate,
-                    rogueDieStartDate: rogueDieStartDate,
-                    rogueDodgeStartDate: rogueDodgeStartDate,
-                    isBombThrowActive: isBombThrowActive,
-                    bombThrowStartDate: bombThrowStartDate,
-                    isKnifeThrowActive: isKnifeThrowActive,
-                    knifeThrowStartDate: knifeThrowStartDate,
-                    isShurikenActive: isShurikenActive,
-                    shurikenStartDate: shurikenStartDate,
-                    offsetX: rogueOffsetX,
-                    offsetY: rogueOffsetY
-                )
-                .zIndex((isRogueAttacking || isShurikenActive || isBombThrowActive || isKnifeThrowActive) ? 3 : 1)
+            GameOverlaysTouchLayer(
+                enemyWaveProfile: enemyWaveProfile,
+                enemyCount: enemyCount,
+                enemyStates: enemyStates,
+                touchTargetSize: touchTargetSize,
+                rogueOffsetX: rogueOffsetX,
+                rogueOffsetY: rogueOffsetY,
+                isAttackInputLocked: isAttackInputLocked,
+                isRogueWalking: isRogueWalking,
+                canTapEnemies: canTapEnemies,
+                isInventoryEnemyTargetSelectionActive: isInventoryEnemyTargetSelectionActive,
+                isBombThrowActive: isBombThrowActive,
+                isKnifeThrowActive: isKnifeThrowActive,
+                onEnemyTap: onEnemyTap,
+                onRogueTap: onRogueTap,
+                onRogueLongPress: onRogueLongPress
+            )
 
-                if let healStart = healEffectStartDate {
-                    HealEffectView(
-                        startDate: healStart,
-                        offsetX: rogueOffsetX,
-                        offsetY: rogueOffsetY
-                    )
-                    .zIndex(4)
-                }
+            GameOverlaysNextWaveArrowLayer(
+                nextWaveArrowAnimationStartDate: $nextWaveArrowAnimationStartDate,
+                enemyCount: enemyCount,
+                enemyStates: enemyStates,
+                isRogueWalking: isRogueWalking,
+                isRogueAttacking: isRogueAttacking,
+                isEnemyAttackSequenceInProgress: isEnemyAttackSequenceInProgress,
+                isRogueDead: isRogueDead,
+                rogueDamageStartDate: rogueDamageStartDate,
+                rogueDieStartDate: rogueDieStartDate,
+                isBombThrowActive: isBombThrowActive,
+                isKnifeThrowActive: isKnifeThrowActive,
+                isInventoryEnemyTargetSelectionActive: isInventoryEnemyTargetSelectionActive,
+                onNextWaveTap: onNextWaveTap
+            )
 
-                if let manaStart = manaRestoreEffectStartDate {
-                    ManaRestoreEffectView(
-                        startDate: manaStart,
-                        offsetX: rogueOffsetX,
-                        offsetY: rogueOffsetY
-                    )
-                    .zIndex(4)
-                }
-            }
+            GameOverlaysRoomWipeLayer(isRoomWiping: isRoomWiping, roomWipeProgress: roomWipeProgress)
 
-            if isBombThrowActive, let bProjStart = bombProjectileStartDate, let bTIdx = bombTargetIndex {
-                let destBomb = slotPosition(for: bTIdx)
-                BombThrownFlightView(
-                    startDate: bProjStart,
-                    duration: GameConstants.bombProjectileDuration,
-                    fromX: rogueOffsetX,
-                    fromY: rogueOffsetY,
-                    toX: destBomb.x,
-                    toY: destBomb.y
-                )
-                .zIndex(8)
-            }
+            GameOverlaysHeartsHUD(heartsRemaining: heartsRemaining)
 
-            if isBombThrowActive, let bGroundStart = bombGroundStartDate, let bTIdx = bombTargetIndex {
-                let gPos = slotPosition(for: bTIdx)
-                TimelineView(.animation(minimumInterval: GameConstants.bombGroundFrameDuration)) { context in
-                    SpriteSheetView(
-                        name: "BombGround",
-                        frameCount: GameConstants.bombGroundFrameCount,
-                        date: context.date,
-                        animationStartDate: bGroundStart,
-                        frameDuration: GameConstants.bombGroundFrameDuration,
-                        loopAnimation: false
-                    )
-                }
-                .frame(width: GameConstants.spriteFrameSize, height: GameConstants.spriteFrameSize)
-                .offset(x: gPos.x, y: gPos.y)
-                .zIndex(7)
-            }
-
-            if isKnifeThrowActive, let kProjStart = knifeProjectileStartDate, let kTIdx = knifeTargetIndex {
-                let destKnife = slotPosition(for: kTIdx)
-                KnifeThrownFlightView(
-                    startDate: kProjStart,
-                    duration: GameConstants.knifeProjectileDuration,
-                    fromX: rogueOffsetX + GameConstants.knifeSpawnOffsetX,
-                    fromY: rogueOffsetY,
-                    toX: destKnife.x,
-                    toY: destKnife.y
-                )
-                .zIndex(8)
-            }
-
-            GeometryReader { geo in
-                let cx = geo.size.width / 2
-                let cy = geo.size.height / 2
-                ZStack {
-                    ForEach([0, 1, 2, 3], id: \.self) { (index: Int) in
-                        let pos = enemyWaveProfile.position(index: index, enemyCount: enemyCount)
-                        let fallbackHitsToKill = enemyWaveProfile.hitsToKill
-                        let state = index < enemyStates.count ? enemyStates[index] : EnemyState(hitCount: fallbackHitsToKill, hitsToKill: fallbackHitsToKill, dead: true, dying: false, deathStartDate: nil, rogueAttacksUntilEnemyTurn: 0)
-                        if !state.dead, !state.dying {
-                            Button(action: { onEnemyTap(index) }) {
-                                Color.white.opacity(0.01)
-                            }
-                            .buttonStyle(.plain)
-                            .frame(width: touchTargetSize, height: touchTargetSize)
-                            .contentShape(Rectangle())
-                            .position(x: cx + pos.x, y: cy + pos.y)
-                            .disabled({
-                                if isInventoryEnemyTargetSelectionActive {
-                                    return isAttackInputLocked || isRogueWalking || state.hitCount >= state.hitsToKill || isBombThrowActive || isKnifeThrowActive
-                                }
-                                return isAttackInputLocked || isRogueWalking || state.hitCount >= state.hitsToKill || !canTapEnemies
-                            }())
-                            .accessibilityLabel(enemyWaveProfile.accessibilityLabel(enemyIndex: index))
-                            .accessibilityHint("Tap to attack")
-                        }
-                    }
-                    Color.white.opacity(0.01)
-                        .frame(width: touchTargetSize, height: touchTargetSize)
-                        .contentShape(Rectangle())
-                        .position(x: cx + rogueOffsetX, y: cy + rogueOffsetY)
-                        .onTapGesture {
-                            onRogueTap()
-                        }
-                        .onLongPressGesture(minimumDuration: 0.5) {
-                            onRogueLongPress()
-                        }
-                        .accessibilityLabel("Rogue")
-                        .accessibilityHint("Tap for skills, long press to reset game")
-                }
-            }
-            .allowsHitTesting(true)
-
-            // Next-wave arrow button when all enemies are dead and not dying.
-            if enemyCount > 0,
-               enemyStates.count == enemyCount,
-               enemyStates.allSatisfy({ $0.dead && !$0.dying }),
-               !isRogueWalking {
-                GeometryReader { geo in
-                    let cx = geo.size.width / 2
-                    let cy = geo.size.height / 2
-                    let arrowOffsetX = GameConstants.spriteFrameSize * 0.75 - 21
-                    let arrowOffsetY: CGFloat = 33
-                    TimelineView(.periodic(from: nextWaveArrowAnimationStartDate, by: 0.12)) { context in
-                        let stepInterval: Double = 0.12
-                        let stepsFirstCycleCount: Int = 7 // -15 -> +3 (18px total in 3px increments)
-                        let stepsSubsequentCycleCount: Int = 8 // -18, -15, ... +3
-                        let elapsedSteps: Int = max(0, Int(floor(context.date.timeIntervalSince(nextWaveArrowAnimationStartDate) / stepInterval)))
-
-                        let animatedOffsetX: CGFloat = {
-                            if elapsedSteps < stepsFirstCycleCount {
-                                // Starts 15px left of the current position.
-                                return -15 + (CGFloat(elapsedSteps) * 3)
-                            }
-                            // After the first sweep, snap back to 18px left and repeat.
-                            let subsequentIndex = (elapsedSteps - stepsFirstCycleCount) % stepsSubsequentCycleCount
-                            switch subsequentIndex {
-                            case 0: return -18
-                            case 1: return -15
-                            case 2: return -12
-                            case 3: return -9
-                            case 4: return -6
-                            case 5: return -3
-                            case 6: return 0
-                            default: return 3
-                            }
-                        }()
-
-                        Button(action: { onNextWaveTap(arrowOffsetX, arrowOffsetY) }) {
-                            Image("Arrow")
-                                .interpolation(.none)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(isRogueAttacking || isRogueWalking || isEnemyAttackSequenceInProgress || isRogueDead || rogueDamageStartDate != nil || rogueDieStartDate != nil || isBombThrowActive || isKnifeThrowActive || isInventoryEnemyTargetSelectionActive)
-                        .position(
-                            x: cx + arrowOffsetX + animatedOffsetX,
-                            y: cy + arrowOffsetY
-                        )
-                        .accessibilityLabel("Next wave")
-                        .accessibilityHint("Spawn new enemies")
-                    }
-                }
-                .onAppear {
-                    nextWaveArrowAnimationStartDate = .now
-                }
-            }
-
-            // George Lucas–style wipe to black (right -> left), above everything.
-            if isRoomWiping {
-                GeometryReader { geo in
-                    Rectangle()
-                        .fill(Color.black)
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        // roomWipeProgress: 1 (off-screen right) to -1 (off-screen left)
-                        .offset(x: roomWipeProgress * geo.size.width, y: 0)
-                        .ignoresSafeArea()
-                        .allowsHitTesting(false)
-                }
-                // `zIndex` must be applied to the ZStack sibling (the GeometryReader), not
-                // only to its internal Rectangle.
-                .zIndex(1000)
-            }
-
-            VStack {
-                HStack(spacing: 2) {
-                    ForEach(0..<GameConstants.heartsInitial, id: \.self) { idx in
-                        let progress = removingHeartStep[idx] ?? 0
-                        Image("Heart")
-                            .resizable()
-                            .frame(width: 14, height: 14)
-                            .opacity({
-                                if idx < heartsRemaining { return 1 }
-                                if removingHeartSlots.contains(idx) {
-                                    return max(0, min(1, 1 - progress))
-                                }
-                                return 0
-                            }())
-                            .offset(y: {
-                                guard removingHeartSlots.contains(idx) else { return 0 }
-                                // Total travel: 15px.
-                                return -CGFloat(progress) * 15
-                            }())
-                    }
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, 4)
-                .padding(.top, 4)
-                .offset(x: 37, y: 31)
-                .onChange(of: heartsRemaining) { oldValue, newValue in
-                    // Health increased or fully reset: just show the new state immediately.
-                    guard newValue < oldValue else {
-                        removingHeartSlots.removeAll()
-                        removingHeartStep.removeAll()
-                        return
-                    }
-                    
-                    // Animate each lost heart (typically just one) up 15px and fade out.
-                    let removedSlots = (newValue..<oldValue).reversed()
-                    for removedIdx in removedSlots where removedIdx >= 0 && removedIdx < GameConstants.heartsInitial {
-                        removingHeartSlots.insert(removedIdx)
-                        removingHeartStep[removedIdx] = 0
-
-                        // Smoothly animate upward + fade over 500ms.
-                        withAnimation(.linear(duration: 0.5)) {
-                            removingHeartStep[removedIdx] = 1
-                        }
-
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            removingHeartSlots.remove(removedIdx)
-                            removingHeartStep.removeValue(forKey: removedIdx)
-                        }
-                    }
-                }
-
-                Spacer()
-            }
-
-            VStack {
-                HStack(spacing: 2) {
-                    Spacer()
-                    ForEach((0..<GameConstants.manaInitial).reversed(), id: \.self) { idx in
-                        let progress = removingManaStep[idx] ?? 0
-                        Image("Mana")
-                            .resizable()
-                            .interpolation(.none)
-                            .frame(width: 14, height: 14)
-                            .opacity({
-                                if idx < manaRemaining { return 1 }
-                                if removingManaSlots.contains(idx) {
-                                    return max(0, min(1, 1 - progress))
-                                }
-                                return 0
-                            }())
-                            .offset(y: {
-                                guard removingManaSlots.contains(idx) else { return 0 }
-                                // Total travel: 15px.
-                                return -CGFloat(progress) * 15
-                            }())
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.trailing, 4)
-                .padding(.top, 4)
-                .offset(x: -37, y: 31)
-                .onChange(of: manaRemaining) { oldValue, newValue in
-                    guard newValue < oldValue else {
-                        removingManaSlots.removeAll()
-                        removingManaStep.removeAll()
-                        return
-                    }
-
-                    let removedSlots = (newValue..<oldValue).reversed()
-                    for removedIdx in removedSlots where removedIdx >= 0 && removedIdx < GameConstants.manaInitial {
-                        removingManaSlots.insert(removedIdx)
-                        removingManaStep[removedIdx] = 0
-
-                        // Smoothly animate upward + fade over 500ms.
-                        withAnimation(.linear(duration: 0.5)) {
-                            removingManaStep[removedIdx] = 1
-                        }
-
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            removingManaSlots.remove(removedIdx)
-                            removingManaStep.removeValue(forKey: removedIdx)
-                        }
-                    }
-                }
-
-                Spacer()
-            }
+            GameOverlaysManaHUD(manaRemaining: manaRemaining)
         }
     }
 }
@@ -3272,59 +3499,65 @@ private struct SpriteSheetView: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            let side = max(1, min(geo.size.width, geo.size.height))
-            let ideal = idealElapsed(for: date)
-            let elapsed: Double = {
-                guard let i = ideal else {
-                    return date.timeIntervalSinceReferenceDate
-                }
-                return cappedElapsed ?? i
-            }()
-            let frameIndex: Int = {
-                if let _ = animationStartDate {
-                    let index: Int = loopAnimation
-                        ? Int(elapsed / frameDuration) % frameCount
-                        : min(Int(elapsed / frameDuration), frameCount - 1)
-                    return max(0, min(index, frameCount - 1))
-                }
-                if let sf = startFrame {
-                    if startDate != nil {
-                        return (Int(elapsed / GameConstants.spriteFrameDuration) + sf) % frameCount
-                    }
-                    return sf
-                }
-                return Int(elapsed / frameDuration) % frameCount
-            }()
+        Group {
+            if frameCount <= 0 {
+                Color.clear
+            } else {
+                GeometryReader { geo in
+                    let side = max(1, min(geo.size.width, geo.size.height))
+                    let ideal = idealElapsed(for: date)
+                    let elapsed: Double = {
+                        guard let i = ideal else {
+                            return date.timeIntervalSinceReferenceDate
+                        }
+                        return cappedElapsed ?? i
+                    }()
+                    let frameIndex: Int = {
+                        if let _ = animationStartDate {
+                            let index: Int = loopAnimation
+                                ? Int(elapsed / frameDuration) % frameCount
+                                : min(Int(elapsed / frameDuration), frameCount - 1)
+                            return max(0, min(index, frameCount - 1))
+                        }
+                        if let sf = startFrame {
+                            if startDate != nil {
+                                return (Int(elapsed / GameConstants.spriteFrameDuration) + sf) % frameCount
+                            }
+                            return sf
+                        }
+                        return Int(elapsed / frameDuration) % frameCount
+                    }()
 
-            Image(name)
-                .resizable()
-                .interpolation(.none)
-                .scaledToFill()
-                .frame(width: side * CGFloat(frameCount), height: side)
-                .frame(width: side, height: side, alignment: .leading)
-                .offset(x: -CGFloat(frameIndex) * side)
-                .animation(nil, value: name)
-                .clipped()
-                // watchOS: first-use `.drawingGroup()` compiles Metal pipelines and can freeze UI for seconds on cold launch.
+                    Image(name)
+                        .resizable()
+                        .interpolation(.none)
+                        .scaledToFill()
+                        .frame(width: side * CGFloat(frameCount), height: side)
+                        .frame(width: side, height: side, alignment: .leading)
+                        .offset(x: -CGFloat(frameIndex) * side)
+                        .animation(nil, value: name)
+                        .clipped()
+                        // watchOS: first-use `.drawingGroup()` compiles Metal pipelines and can freeze UI for seconds on cold launch.
 #if !os(watchOS)
-                .drawingGroup()
+                        .drawingGroup()
 #endif
-        }
-        .onAppear {
-            if startFrame != nil, startDate == nil {
-                startDate = Date()
-                cappedElapsed = nil
+                }
+                .onAppear {
+                    if startFrame != nil, startDate == nil {
+                        startDate = Date()
+                        cappedElapsed = nil
+                    }
+                }
+                .onChange(of: date) { _, newDate in
+                    guard let ideal = idealElapsed(for: newDate) else { return }
+                    let maxAdvance = Self.maxAdvancePerUpdate * frameDuration
+                    let prev = cappedElapsed ?? ideal
+                    cappedElapsed = min(ideal, prev + maxAdvance)
+                }
+                .onChange(of: animationStartDate) { _, _ in
+                    cappedElapsed = nil
+                }
             }
-        }
-        .onChange(of: date) { _, newDate in
-            guard let ideal = idealElapsed(for: newDate) else { return }
-            let maxAdvance = Self.maxAdvancePerUpdate * frameDuration
-            let prev = cappedElapsed ?? ideal
-            cappedElapsed = min(ideal, prev + maxAdvance)
-        }
-        .onChange(of: animationStartDate) { _, _ in
-            cappedElapsed = nil
         }
     }
 }

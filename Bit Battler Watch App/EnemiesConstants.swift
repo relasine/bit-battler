@@ -6,7 +6,7 @@
 import CoreGraphics
 import Foundation
 
-// MARK: - Wave roll (`resetEnemies` uses `Int.random(in: 0..<4)`)
+// MARK: - Wave roll (`resetEnemies` uses `Int.random(in: 0..<EnemyWaveRoll.allCases.count)`)
 
 enum EnemyWaveRoll: Int, CaseIterable {
     case primarySlot = 0
@@ -37,6 +37,10 @@ enum EnemyWaveProfile: Equatable {
     case cyclops
 
     static func resolve(isSlimeWave: Bool, isTrollWave: Bool, isCyclopsWave: Bool, roomNumber: Int) -> EnemyWaveProfile {
+        #if DEBUG
+        let flagCount = [isSlimeWave, isTrollWave, isCyclopsWave].filter(\.self).count
+        assert(flagCount <= 1, "EnemyWaveProfile.resolve: at most one wave-type flag should be true (got \(flagCount))")
+        #endif
         if isCyclopsWave { return .cyclops }
         if isTrollWave { return .troll }
         if isSlimeWave { return roomNumber >= EnemiesConstants.slimeBlueMinRoomNumber ? .slimeBlue : .slimeGreen }
@@ -206,8 +210,9 @@ enum EnemiesConstants {
 
     /// When `enemyCount` is 3, the middle enemy (index 1) is shifted 12pt left.
     static func primaryEnemySlotPosition(index: Int, enemyCount: Int) -> (x: CGFloat, y: CGFloat) {
-        let base = primaryEnemySlotPositions[index]
-        if enemyCount == 3, index == 1 {
+        let i = max(0, min(index, primaryEnemySlotPositions.count - 1))
+        let base = primaryEnemySlotPositions[i]
+        if enemyCount == 3, i == 1 {
             return (base.x - 12, base.y)
         }
         return (base.x, base.y)
