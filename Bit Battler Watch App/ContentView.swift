@@ -239,6 +239,8 @@ struct EnemyHitFloatState: Equatable {
 }
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
+
     @State private var isRogueAttacking = false
     @State private var attackStartDate: Date?
     @State private var isAttackInputLocked = false
@@ -565,6 +567,7 @@ struct ContentView: View {
     private func wipeToNextWaveAndReset() {
         guard !isRoomWiping else { return }
 
+        let sessionId = gameSessionId
         let wipeDuration = GameConstants.roomWipeDuration
 
         withTransaction(Transaction(animation: nil)) {
@@ -578,6 +581,7 @@ struct ContentView: View {
 
         // Reset while fully covered (midpoint of travel).
         DispatchQueue.main.asyncAfter(deadline: .now() + wipeDuration / 2) {
+            guard gameSessionId == sessionId else { return }
             withTransaction(Transaction(animation: nil)) {
                 resetEnemies()
                 roomNumber += 1
@@ -614,6 +618,7 @@ struct ContentView: View {
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + wipeDuration) {
+            guard gameSessionId == sessionId else { return }
             withTransaction(Transaction(animation: nil)) {
                 isRoomWiping = false
                 roomWipeProgress = 1
@@ -1013,6 +1018,34 @@ struct ContentView: View {
         enemyHitFloatStates.removeAll()
 
         resetEnemies()
+        BitBattlerGamePersistence.clear()
+    }
+
+    private func saveGameSnapshotIfPlaying() {
+        guard rootScreen == .game else { return }
+        BitBattlerGamePersistence.save(
+            BitBattlerGamePersistence.Snapshot(
+                roomNumber: roomNumber,
+                heartsRemaining: heartsRemaining,
+                manaRemaining: manaRemaining,
+                totalHitsUsed: totalHitsUsed,
+                inventoryStacks: inventoryStacks
+            )
+        )
+    }
+
+    /// Restore progress after process death, or roll the first wave when starting fresh.
+    private func applySnapshotWhenEnteringGameplay() {
+        if let snapshot = BitBattlerGamePersistence.load() {
+            roomNumber = snapshot.roomNumber
+            heartsRemaining = snapshot.heartsRemaining
+            manaRemaining = snapshot.manaRemaining
+            totalHitsUsed = snapshot.totalHitsUsed
+            inventoryStacks = snapshot.inventoryStacks
+            resetEnemies()
+        } else if enemyStates.isEmpty {
+            resetEnemies()
+        }
     }
 
     private func returnToTitleScreenResettingGame() {
@@ -1041,7 +1074,9 @@ struct ContentView: View {
         GameplayAssetPrewarm.ensureStarted()
         GameplayAssetPrewarm.whenComplete {
             DispatchQueue.main.async {
+                guard isStartLoadingGame, rootScreen == .loading else { return }
                 withTransaction(Transaction(animation: nil)) {
+                    applySnapshotWhenEnteringGameplay()
                     rootScreen = .game
                 }
                 DispatchQueue.main.async {
@@ -1403,6 +1438,7 @@ struct ContentView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + enemyDamageDuration) {
                 guard gameSessionId == sessionId else { return }
                 withTransaction(Transaction(animation: nil)) {
+                    damagedEnemyIndex = nil
                     enemyDamageStartDate = nil
                 }
 
@@ -1413,6 +1449,7 @@ struct ContentView: View {
                     let potionDropIndex = allRemainingDie ? killedIndices.first : nil
 
                     for idx in killedIndices {
+                        guard idx < enemyStates.count else { continue }
                         withTransaction(Transaction(animation: nil)) {
                             enemyStates[idx].dying = true
                             enemyStates[idx].deathStartDate = Date()
@@ -1431,6 +1468,7 @@ struct ContentView: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + enemyDeathAnimationDuration) {
                         guard gameSessionId == sessionId else { return }
                         for idx in killedIndices {
+                            guard idx < enemyStates.count else { continue }
                             withTransaction(Transaction(animation: nil)) {
                                 enemyStates[idx].dead = true
                                 enemyStates[idx].dying = false
@@ -1531,8 +1569,8 @@ struct ContentView: View {
                     }
 
                     if isLastDyingStart {
+                        guard gameSessionId == sessionId else { return }
                         withTransaction(Transaction(animation: nil)) {
-                            guard gameSessionId == sessionId else { return }
                             potionDropEnemyIndex = nil
                             potionDropImageName = nil
                         }
@@ -1583,6 +1621,11 @@ struct ContentView: View {
             }
 #endif
         }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .background {
+                saveGameSnapshotIfPlaying()
+            }
+        }
     }
 
     private var titleLandingView: some View {
@@ -1605,6 +1648,7 @@ struct ContentView: View {
                     beginTransitionFromTitleToGame()
 #else
                     DispatchQueue.main.async {
+                        applySnapshotWhenEnteringGameplay()
                         rootScreen = .game
                     }
 #endif
@@ -1974,6 +2018,7 @@ struct ContentView: View {
                 }
             }
             .onAppear {
+                guard rootScreen == .game, !isRoomWiping else { return }
                 if enemyStates.isEmpty {
                     resetEnemies()
                 }
@@ -2374,10 +2419,43 @@ struct EnemyState {
     var rogueAttacksUntilEnemyTurn: Int
 }
 
-private struct InventoryStack: Identifiable, Equatable {
+private struct InventoryStack: Identifiable, Equatable, Codable {
+    let id: UUID
     var displayName: String
     var count: Int
-    var id: String { displayName }
+
+    init(id: UUID = UUID(), displayName: String, count: Int) {
+        self.id = id
+        self.displayName = displayName
+        self.count = count
+    }
+}
+
+/// Lightweight progress save for watchOS background termination / process death.
+private enum BitBattlerGamePersistence {
+    private static let defaultsKey = "BitBattlerGameSnapshotV1"
+
+    struct Snapshot: Codable {
+        var roomNumber: Int
+        var heartsRemaining: Int
+        var manaRemaining: Int
+        var totalHitsUsed: Int
+        var inventoryStacks: [InventoryStack]
+    }
+
+    static func save(_ snapshot: Snapshot) {
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        UserDefaults.standard.set(data, forKey: defaultsKey)
+    }
+
+    static func load() -> Snapshot? {
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey) else { return nil }
+        return try? JSONDecoder().decode(Snapshot.self, from: data)
+    }
+
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: defaultsKey)
+    }
 }
 
 // MARK: - GameOverlaysView subtrees (smaller bodies = cheaper SwiftUI diffing on watchOS)
@@ -3011,14 +3089,14 @@ struct GameOverlaysView: View {
 
 /// Sizes from the asset catalog — no extra scaling; one horizontal strip, `GameConstants.bombThrownFrameCount` frames wide.
 private enum BombThrownAssetLayout {
-    static var stripPointSize: CGSize {
+    static let stripPointSize: CGSize = {
         #if os(watchOS)
         if let img = UIImage(named: "BombThrown") {
             return img.size
         }
         #endif
         return CGSize(width: 32, height: 32)
-    }
+    }()
 
     static var frameWidth: CGFloat {
         stripPointSize.width / CGFloat(GameConstants.bombThrownFrameCount)
@@ -3067,14 +3145,14 @@ private struct BombThrownFlightView: View {
 
 /// `KnifeThrown` horizontal strip sizing — matches `BombThrown` pattern.
 private enum KnifeThrownAssetLayout {
-    static var stripPointSize: CGSize {
+    static let stripPointSize: CGSize = {
         #if os(watchOS)
         if let img = UIImage(named: "KnifeThrown") {
             return img.size
         }
         #endif
         return CGSize(width: 32, height: 32)
-    }
+    }()
 
     static var frameWidth: CGFloat {
         stripPointSize.width / CGFloat(GameConstants.knifeThrownFrameCount)
